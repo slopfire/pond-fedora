@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+script=$(readlink -f -- "$0")
+root=$(cd -- "$(dirname -- "$script")/.." && pwd)
+tools="$root/fedora-tools"
+source_dir="$root/pond-interface"
+build="$tools/.build"
+usage() {
+  printf '%s\n' 'Usage: ./pond {update|build|install-shell|install-system|build-launcher|install-launcher|status}'
+}
+case "${1:-}" in
+status)
+  for repo in pond-interface vicinae package-manager; do
+    printf '\n%s\n' "$repo"
+    git -C "$root/$repo" status --short --branch
+    git -C "$root/$repo" log -1 --format='%h %s'
+  done
+  ;;
+update)
+  for repo in pond-interface vicinae package-manager; do
+    if [[ -n $(git -C "$root/$repo" status --porcelain) ]]; then
+      printf 'Uncommitted changes in %s. Commit or save them first.\n' "$repo" >&2; exit 1
+    fi
+    if [[ -n $(git -C "$root/$repo" status --porcelain --untracked-files=normal) ]]; then
+      printf 'Untracked files in %s. Save them first.\n' "$repo" >&2; exit 1
+    fi
+  done
+  for repo in pond-interface vicinae package-manager; do
+    git -C "$root/$repo" fetch origin main
+  done
+  git -C "$source_dir" rebase origin/main
+  for repo in vicinae package-manager; do git -C "$root/$repo" merge --ff-only origin/main; done
+  printf '%s\n' 'Sources updated. Run ./pond build and the install commands for the components you want.'
+  ;;
+build)
+  [[ -z $(git -C "$source_dir" status --porcelain) ]] || { printf '%s\n' 'Commit or save Pond source changes before building.' >&2; exit 1; }
+  mkdir -p "$build"
+  rm -f "$build/system-built"
+  cmake -S "$source_dir" -B "$build/system" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+  cmake --build "$build/system" --parallel "${JOBS:-4}"
+  cmake -S "$source_dir/screenshot/native" -B "$build/screenshot" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+  cmake --build "$build/screenshot" --parallel "${JOBS:-4}"
+  git -C "$source_dir" rev-parse HEAD > "$build/system-built"
+  ;;
+install-shell) exec "$tools/bin/install-shell" ;;
+install-system)
+  [[ -f "$build/system-built" && $(<"$build/system-built") == "$(git -C "$source_dir" rev-parse HEAD)" && -z $(git -C "$source_dir" status --porcelain) ]] || { printf '%s\n' 'Pond source changed or is not built. Commit changes and run ./pond build.' >&2; exit 1; }
+  system="$build/system/Pond/System"
+  drag="$build/screenshot/Pond/Screenshot/Native"
+  for f in "$build/system/libpond_system.so" "$system/libpond_systemplugin.so" "$system/pond_system.qmltypes" "$system/qmldir" "$build/screenshot/libpond_screenshot_drag.so" "$drag/libpond_screenshot_dragplugin.so" "$drag/pond_screenshot_drag.qmltypes" "$drag/qmldir"; do
+    [[ -f "$f" ]] || { printf 'Missing %s. Run ./pond build first.\n' "$f" >&2; exit 1; }
+  done
+  stage=$(mktemp -d "$build/stage.XXXXXX")
+  trap 'rm -rf -- "$stage"' EXIT
+  qml="$stage/usr/lib64/qt6/qml/Pond"
+  mkdir -p "$stage/usr/share/pond-interface" "$stage/usr/local/bin" "$qml/"{System,Screenshot/Native,Wallpaper,Daylight}
+  cp -a "$source_dir/shell" "$source_dir/lockscreen" "$source_dir/config" "$stage/usr/share/pond-interface/"
+  install -m 755 "$build/system/libpond_system.so" "$system/libpond_systemplugin.so" "$qml/System/"
+  install -m 644 "$system/qmldir" "$system/pond_system.qmltypes" "$qml/System/"
+  install -m 755 "$build/screenshot/libpond_screenshot_drag.so" "$drag/libpond_screenshot_dragplugin.so" "$qml/Screenshot/Native/"
+  install -m 644 "$drag/qmldir" "$drag/pond_screenshot_drag.qmltypes" "$qml/Screenshot/Native/"
+  cp -a "$source_dir/screenshot/Preview.qml" "$source_dir/screenshot/State.qml" "$source_dir/screenshot/qmldir" "$source_dir/screenshot/clipboard.py" "$source_dir/screenshot/assets" "$qml/Screenshot/"
+  cp -a "$source_dir/wallpaper/Content.qml" "$source_dir/wallpaper/Reveal.qml" "$source_dir/wallpaper/Window.qml" "$source_dir/wallpaper/qmldir" "$qml/Wallpaper/"
+  cp -a "$source_dir/wallpaper/daylight/"*.qml "$source_dir/wallpaper/daylight/"*.js "$source_dir/wallpaper/daylight/qmldir" "$source_dir/wallpaper/daylight/sky.frag.qsb" "$qml/Daylight/"
+  install -m 755 "$tools/pm" "$stage/usr/local/bin/pm"
+  for lib in "$qml/System/"*.so "$qml/Screenshot/Native/"*.so; do patchelf --set-rpath '$ORIGIN' "$lib"; done
+  if [[ ${POND_DRY_RUN:-0} == 1 ]]; then
+    rsync -rltni --delay-updates --chmod=Du=rwx,Dgo=rx,Fu=rwX,Fgo=rX "$stage/usr/" /usr/
+    printf '%s\n' 'Dry run. No system files were changed.'
+    exit 0
+  fi
+  sudo rsync -rlt --delay-updates --chmod=Du=rwx,Dgo=rx,Fu=rwX,Fgo=rX "$stage/usr/" /usr/
+  printf '%s\n' 'Installed Pond system files and the Fedora pm replacement.'
+  ;;
+build-launcher)
+  [[ -z $(git -C "$root/vicinae" status --porcelain) ]] || { printf '%s\n' 'Commit or save launcher source changes before building.' >&2; exit 1; }
+  mkdir -p "$build"
+  rm -f "$build/launcher-built"
+  tag=$(git -C "$root/vicinae" describe --tags --always)
+  cmake -S "$root/vicinae" -B "$build/vicinae" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DUSE_SYSTEM_CMARK_GFM=OFF -DVICINAE_GIT_TAG="$tag"
+  cmake --build "$build/vicinae" --parallel "${JOBS:-4}"
+  git -C "$root/vicinae" rev-parse HEAD > "$build/launcher-built"
+  ;;
+install-launcher)
+  [[ -f "$build/launcher-built" && $(<"$build/launcher-built") == "$(git -C "$root/vicinae" rev-parse HEAD)" && -z $(git -C "$root/vicinae" status --porcelain) ]] || { printf '%s\n' 'Launcher source changed or is not built. Commit changes and run ./pond build-launcher.' >&2; exit 1; }
+  sudo cmake --install "$build/vicinae"
+  sudo setcap cap_dac_override=ep /usr/libexec/vicinae/vicinae-input-server
+  systemctl --user daemon-reload
+  printf '%s\n' 'Installed the launcher. Restart vicinae.service when convenient.'
+  ;;
+*) usage; exit 2 ;;
+esac

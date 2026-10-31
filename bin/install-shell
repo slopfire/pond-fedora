@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Install tracked shell files without overwriting local changes."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+root = Path(__file__).resolve().parents[2]
+repo = root / 'pond-interface'
+source = repo / 'shell'
+target = Path.home() / '.config/quickshell/pond-shell'
+state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'pond-fedora/shell-manifest.json'
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+tracked = subprocess.check_output(['git', '-C', str(repo), 'ls-files', '-z', '--', 'shell/'])
+files = [Path(os.fsdecode(x)).relative_to('shell') for x in tracked.split(b'\0') if x]
+previous = json.loads(state.read_text()) if state.exists() else {}
+new = {}
+conflicts = []
+for rel in files:
+    key = rel.as_posix()
+    src, dst = source / rel, target / rel
+    if not src.is_file() or src.is_symlink():
+        raise SystemExit(f'Invalid source file: {src}')
+    new[key] = digest(src)
+    if dst.is_symlink() or (dst.exists() and not dst.is_file()):
+        conflicts.append(key)
+    elif dst.exists():
+        current = digest(dst)
+        if current != new[key] and current != previous.get(key):
+            conflicts.append(key)
+    elif key in previous:
+        conflicts.append(key)
+if conflicts:
+    print('Shell files have local changes. No files were installed:', file=sys.stderr)
+    print('\n'.join(conflicts), file=sys.stderr)
+    sys.exit(1)
+for rel in files:
+    src, dst = source / rel, target / rel
+    if dst.exists() and digest(dst) == new[rel.as_posix()]:
+        continue
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix='.pond-install-', dir=dst.parent)
+    os.close(fd)
+    try:
+        shutil.copy2(src, name)
+        os.replace(name, dst)
+    finally:
+        if os.path.exists(name): os.unlink(name)
+state.parent.mkdir(parents=True, exist_ok=True)
+fd, name = tempfile.mkstemp(prefix='.shell-manifest-', dir=state.parent)
+with os.fdopen(fd, 'w') as stream:
+    json.dump(new, stream, indent=2, sort_keys=True)
+    stream.write('\n')
+os.replace(name, state)
+removed = sorted(set(previous) - set(new))
+print(f'Installed {len(files)} tracked shell files in {target}.')
+if removed:
+    print('Files removed from the source were left in place:')
+    print('\n'.join(removed))
