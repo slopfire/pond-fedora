@@ -83,7 +83,11 @@ build-launcher)
   ;;
 install-launcher)
   [[ -f "$build/launcher-built" && $(<"$build/launcher-built") == "$(git -C "$root/vicinae" rev-parse HEAD)" && -z $(git -C "$root/vicinae" status --porcelain) ]] || { printf '%s\n' 'Launcher source changed or is not built. Commit changes and run ./pond build-launcher.' >&2; exit 1; }
-  sudo cmake --install "$build/vicinae"
+  stage=$(mktemp -d "$build/launcher-stage.XXXXXX")
+  trap 'rm -rf -- "$stage"' EXIT
+  DESTDIR="$stage" cmake --install "$build/vicinae"
+  [[ -f "$stage/usr/libexec/vicinae/vicinae-input-server" ]] || { printf '%s\n' 'The staged launcher has no input server.' >&2; exit 1; }
+  sudo rsync -rlt --delay-updates --chmod=Du=rwx,Dgo=rx,Fu=rwX,Fgo=rX "$stage/usr/" /usr/
   sudo setcap cap_dac_override=ep /usr/libexec/vicinae/vicinae-input-server
   systemctl --user daemon-reload
   printf '%s\n' 'Installed the launcher. Restart vicinae.service when convenient.'
