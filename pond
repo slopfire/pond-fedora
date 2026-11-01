@@ -5,8 +5,15 @@ root=$(cd -- "$(dirname -- "$script")/.." && pwd)
 tools="$root/fedora-tools"
 source_dir="$root/pond-interface"
 build="$tools/.build"
+package_source="$root/package-manager"
+check_package_manager_build() {
+  [[ -f "$build/package-manager-built" && $(<"$build/package-manager-built") == "$(git -C "$package_source" rev-parse HEAD)" && -z $(git -C "$package_source" status --porcelain) ]] || { printf '%s\n' 'Package manager source changed or is not built. Commit changes and run ./pond build-package-manager.' >&2; exit 1; }
+  for file in "$build/package-manager/release/pm" "$package_source/launcher-extension/dist/install.js" "$package_source/launcher-extension/dist/bin/pm-extension-bridge"; do
+    [[ -f "$file" ]] || { printf 'Missing %s. Run ./pond build-package-manager.\n' "$file" >&2; exit 1; }
+  done
+}
 usage() {
-  printf '%s\n' 'Usage: ./pond {update [--check]|build|install-shell|install-system|build-launcher|install-launcher|status}'
+  printf '%s\n' 'Usage: ./pond {update [--check]|build|install-shell|install-system|build-package-manager|install-package-manager|build-launcher|install-launcher|status}'
 }
 case "${1:-}" in
 status)
@@ -52,15 +59,13 @@ update)
     printf '\n%s\n' 'Fetched upstream refs. Source branches and installed files were not changed.'
     exit 0
   fi
-  # Check every fast-forward before rebasing Pond, so a diverged launcher does
-  # not leave only Pond updated.
-  for repo in vicinae package-manager; do
-    if ! git -C "$root/$repo" merge-base --is-ancestor HEAD origin/main; then
-      printf '%s has local commits. Review them before updating any source branch.\n' "$repo" >&2; exit 1
-    fi
-  done
+  # Check the launcher before rebasing either Fedora branch.
+  if ! git -C "$root/vicinae" merge-base --is-ancestor HEAD origin/main; then
+    printf '%s\n' 'vicinae has local commits. Review them before updating any source branch.' >&2; exit 1
+  fi
   git -C "$source_dir" rebase origin/main
-  for repo in vicinae package-manager; do git -C "$root/$repo" merge --ff-only origin/main; done
+  git -C "$package_source" rebase origin/main
+  git -C "$root/vicinae" merge --ff-only origin/main
   printf '%s\n' 'Sources updated. Run ./pond build and the install commands for the components you want.'
   ;;
 build)
@@ -72,9 +77,11 @@ build)
   cmake -S "$source_dir/screenshot/native" -B "$build/screenshot" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
   cmake --build "$build/screenshot" --parallel "${JOBS:-4}"
   git -C "$source_dir" rev-parse HEAD > "$build/system-built"
+  "$script" build-package-manager
   ;;
 install-shell) exec "$tools/bin/install-shell" ;;
 install-system)
+  check_package_manager_build
   [[ -f "$build/system-built" && $(<"$build/system-built") == "$(git -C "$source_dir" rev-parse HEAD)" && -z $(git -C "$source_dir" status --porcelain) ]] || { printf '%s\n' 'Pond source changed or is not built. Commit changes and run ./pond build.' >&2; exit 1; }
   system="$build/system/Pond/System"
   drag="$build/screenshot/Pond/Screenshot/Native"
@@ -84,7 +91,7 @@ install-system)
   stage=$(mktemp -d "$build/stage.XXXXXX")
   trap 'rm -rf -- "$stage"' EXIT
   qml="$stage/usr/lib64/qt6/qml/Pond"
-  mkdir -p "$stage/usr/share/pond-interface" "$stage/usr/local/bin" "$qml/"{System,Screenshot/Native,Wallpaper,Daylight}
+  mkdir -p "$stage/usr/share/pond-interface" "$qml/"{System,Screenshot/Native,Wallpaper,Daylight}
   cp -a "$source_dir/shell" "$source_dir/lockscreen" "$source_dir/config" "$stage/usr/share/pond-interface/"
   install -m 755 "$build/system/libpond_system.so" "$system/libpond_systemplugin.so" "$qml/System/"
   install -m 644 "$system/qmldir" "$system/pond_system.qmltypes" "$qml/System/"
@@ -93,15 +100,46 @@ install-system)
   cp -a "$source_dir/screenshot/Preview.qml" "$source_dir/screenshot/State.qml" "$source_dir/screenshot/qmldir" "$source_dir/screenshot/clipboard.py" "$source_dir/screenshot/assets" "$qml/Screenshot/"
   cp -a "$source_dir/wallpaper/Content.qml" "$source_dir/wallpaper/Reveal.qml" "$source_dir/wallpaper/Window.qml" "$source_dir/wallpaper/qmldir" "$qml/Wallpaper/"
   cp -a "$source_dir/wallpaper/daylight/"*.qml "$source_dir/wallpaper/daylight/"*.js "$source_dir/wallpaper/daylight/qmldir" "$source_dir/wallpaper/daylight/sky.frag.qsb" "$qml/Daylight/"
-  install -m 755 "$tools/pm" "$stage/usr/local/bin/pm"
   for lib in "$qml/System/"*.so "$qml/Screenshot/Native/"*.so; do patchelf --set-rpath '$ORIGIN' "$lib"; done
   if [[ ${POND_DRY_RUN:-0} == 1 ]]; then
     rsync -rltni --delay-updates --chmod=Du=rwx,Dgo=rx,Fu=rwX,Fgo=rX "$stage/usr/" /usr/
+    "$script" install-package-manager
     printf '%s\n' 'Dry run. No system files were changed.'
     exit 0
   fi
   sudo rsync -rlt --delay-updates --chmod=Du=rwx,Dgo=rx,Fu=rwX,Fgo=rX "$stage/usr/" /usr/
-  printf '%s\n' 'Installed Pond system files and the Fedora pm replacement.'
+  "$script" install-package-manager
+  printf '%s\n' 'Installed Pond system files and package manager.'
+  ;;
+build-package-manager)
+  [[ -z $(git -C "$package_source" status --porcelain) ]] || { printf '%s\n' 'Commit or save package manager source changes before building.' >&2; exit 1; }
+  pkg-config --exists flatpak || { printf '%s\n' 'Install flatpak-devel before building the upstream Flatpak backend.' >&2; exit 1; }
+  mkdir -p "$build"
+  rm -f "$build/package-manager-built"
+  export CARGO_TARGET_DIR="$build/package-manager"
+  export CARGO_BUILD_JOBS="${JOBS:-4}"
+  cargo build --manifest-path "$package_source/Cargo.toml" --locked --release -p pm
+  (cd "$package_source/launcher-extension" && npm ci --prefer-offline && npm run build)
+  git -C "$package_source" rev-parse HEAD > "$build/package-manager-built"
+  ;;
+install-package-manager)
+  check_package_manager_build
+  # Validate the user bundle before changing either install location.
+  POND_DRY_RUN=1 "$tools/bin/install-extension"
+  stage=$(mktemp -d "$build/package-manager-stage.XXXXXX")
+  trap 'rm -rf -- "$stage"' EXIT
+  install -D -m 755 "$build/package-manager/release/pm" "$stage/usr/libexec/pond/pm"
+  install -D -m 755 "$tools/pm" "$stage/usr/local/bin/pm"
+  mkdir -p "$stage/usr/share/pond-pm"
+  cp -a "$package_source/icons" "$stage/usr/share/pond-pm/"
+  if [[ ${POND_DRY_RUN:-0} == 1 ]]; then
+    rsync -rltni --delay-updates --chmod=Du=rwx,Dgo=rx,Fu=rwX,Fgo=rX "$stage/usr/" /usr/
+    printf '%s\n' 'Dry run. No package manager files were installed.'
+    exit 0
+  fi
+  sudo rsync -rlt --delay-updates --chmod=Du=rwx,Dgo=rx,Fu=rwX,Fgo=rX "$stage/usr/" /usr/
+  "$tools/bin/install-extension"
+  printf '%s\n' 'Installed pm and the launcher app installer. Open Install apps in Vicinae.'
   ;;
 build-launcher)
   [[ -z $(git -C "$root/vicinae" status --porcelain) ]] || { printf '%s\n' 'Commit or save launcher source changes before building.' >&2; exit 1; }
@@ -111,8 +149,10 @@ build-launcher)
   cmake -S "$root/vicinae" -B "$build/vicinae" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DUSE_SYSTEM_CMARK_GFM=OFF -DVICINAE_GIT_TAG="$tag"
   cmake --build "$build/vicinae" --parallel "${JOBS:-4}"
   git -C "$root/vicinae" rev-parse HEAD > "$build/launcher-built"
+  "$script" build-package-manager
   ;;
 install-launcher)
+  check_package_manager_build
   [[ -f "$build/launcher-built" && $(<"$build/launcher-built") == "$(git -C "$root/vicinae" rev-parse HEAD)" && -z $(git -C "$root/vicinae" status --porcelain) ]] || { printf '%s\n' 'Launcher source changed or is not built. Commit changes and run ./pond build-launcher.' >&2; exit 1; }
   stage=$(mktemp -d "$build/launcher-stage.XXXXXX")
   trap 'rm -rf -- "$stage"' EXIT
@@ -121,6 +161,7 @@ install-launcher)
   sudo rsync -rlt --delay-updates --chmod=Du=rwx,Dgo=rx,Fu=rwX,Fgo=rX "$stage/usr/" /usr/
   sudo setcap cap_dac_override=ep /usr/libexec/vicinae/vicinae-input-server
   systemctl --user daemon-reload
+  "$script" install-package-manager
   printf '%s\n' 'Installed the launcher. Restart vicinae.service when convenient.'
   ;;
 *) usage; exit 2 ;;

@@ -22,6 +22,7 @@ class WorkflowTest(unittest.TestCase):
         self.env = dict(os.environ, HOME=str(self.home),
                         XDG_STATE_HOME=str(self.home / '.local/state'),
                         XDG_CONFIG_HOME=str(self.home / '.config'),
+                        XDG_DATA_HOME=str(self.home / '.local/share'),
                         GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1',
                         GIT_AUTHOR_NAME='Pond test', GIT_AUTHOR_EMAIL='pond@example.invalid',
                         GIT_COMMITTER_NAME='Pond test', GIT_COMMITTER_EMAIL='pond@example.invalid',
@@ -29,7 +30,9 @@ class WorkflowTest(unittest.TestCase):
         tools = self.root / 'fedora-tools'
         (tools / 'bin').mkdir(parents=True)
         shutil.copy2(TOOLS / 'pond', tools / 'pond')
+        shutil.copy2(TOOLS / 'pm', tools / 'pm')
         shutil.copy2(TOOLS / 'bin/install-shell', tools / 'bin/install-shell')
+        shutil.copy2(TOOLS / 'bin/install-extension', tools / 'bin/install-extension')
 
     def run_command(self, *args):
         return subprocess.run(args, env=self.env, cwd=self.root, text=True,
@@ -55,8 +58,9 @@ class WorkflowTest(unittest.TestCase):
             self.git(origin, 'init', '-b', 'main')
             self.commit(origin, 'shell/main.qml', 'original\n')
             self.git(self.root, 'clone', str(origin), name)
-        self.git(self.root / 'pond-interface', 'switch', '-c', 'fedora')
-        self.commit(self.root / 'pond-interface', 'shell/local.qml', 'local feature\n')
+        for name in ('pond-interface', 'package-manager'):
+            self.git(self.root / name, 'switch', '-c', 'fedora')
+            self.commit(self.root / name, 'shell/local.qml', 'local feature\n')
 
     def advance_origins(self):
         for name in REPOS:
@@ -76,7 +80,8 @@ class WorkflowTest(unittest.TestCase):
         for name in REPOS:
             self.assertTrue((self.root / name / 'shell/new.qml').is_file())
         self.assertEqual((self.root / 'pond-interface/shell/local.qml').read_text(), 'local feature\n')
-        for name in REPOS[1:]:
+        self.assertEqual((self.root / 'package-manager/shell/local.qml').read_text(), 'local feature\n')
+        for name in ('vicinae',):
             self.assertEqual(self.git(self.root / name, 'rev-parse', 'HEAD'),
                              self.git(self.root / 'origins' / name, 'rev-parse', 'HEAD'))
 
@@ -219,6 +224,75 @@ class WorkflowTest(unittest.TestCase):
         result = self.install_shell()
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual((self.target() / 'main.qml').read_text(), 'new version\n')
+
+    def extension_source(self):
+        source = self.root / 'package-manager/launcher-extension/dist'
+        (source / 'bin').mkdir(parents=True)
+        (source / 'package.json').write_text(json.dumps({'name': 'pm-extension', 'author': 'bflycomputer'}))
+        (source / 'install.js').write_text('upstream UI\n')
+        bridge = source / 'bin/pm-extension-bridge'
+        bridge.write_text('upstream bridge\n')
+        bridge.chmod(0o755)
+        return source
+
+    def extension_target(self):
+        return Path(self.env['XDG_DATA_HOME']) / 'vicinae/extensions/pond-pm-extension'
+
+    def install_extension(self):
+        return self.run_command(str(self.root / 'fedora-tools/bin/install-extension'))
+
+    def test_extension_installs_with_the_upstream_launcher_id_and_updates(self):
+        source = self.extension_source()
+        result = self.install_extension()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual((self.extension_target() / 'install.js').read_text(), 'upstream UI\n')
+        (source / 'install.js').write_text('new upstream UI\n')
+        result = self.install_extension()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual((self.extension_target() / 'install.js').read_text(), 'new upstream UI\n')
+        self.assertTrue(os.access(self.extension_target() / 'bin/pm-extension-bridge', os.X_OK))
+
+    def test_extension_dry_run_does_not_create_target(self):
+        self.extension_source()
+        self.env['POND_DRY_RUN'] = '1'
+        result = self.install_extension()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertFalse(self.extension_target().exists())
+
+    def test_extension_refuses_to_overwrite_local_edits(self):
+        self.extension_source()
+        self.assertEqual(self.install_extension().returncode, 0)
+        (self.extension_target() / 'install.js').write_text('local UI\n')
+        result = self.install_extension()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertEqual((self.extension_target() / 'install.js').read_text(), 'local UI\n')
+
+    def test_extension_refuses_a_symlink_target(self):
+        self.extension_source()
+        outside = self.root / 'outside'
+        outside.mkdir()
+        target = self.extension_target()
+        target.parent.mkdir(parents=True)
+        target.symlink_to(outside, target_is_directory=True)
+        result = self.install_extension()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_package_manager_dry_run_stages_cli_icons_and_extension(self):
+        self.setup_sources()
+        self.commit(self.root / 'package-manager', '.gitignore', 'launcher-extension/dist/\n')
+        self.commit(self.root / 'package-manager', 'icons/example.webp', 'icon bytes\n')
+        self.extension_source()
+        build = self.root / 'fedora-tools/.build'
+        (build / 'package-manager/release').mkdir(parents=True)
+        (build / 'package-manager/release/pm').write_text('native CLI\n')
+        (build / 'package-manager-built').write_text(self.git(self.root / 'package-manager', 'rev-parse', 'HEAD') + '\n')
+        self.env['POND_DRY_RUN'] = '1'
+        result = self.pond('install-package-manager')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('share/pond-pm/icons/example.webp', result.stdout)
+        self.assertIn('libexec/pond/pm', result.stdout)
+        self.assertFalse(self.extension_target().exists())
 
 
 if __name__ == '__main__':
