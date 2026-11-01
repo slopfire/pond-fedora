@@ -17,22 +17,33 @@ Run commands from `~/Projects/pond-fedora`.
 
 ```sh
 ./pond status
+./pond update --check
 ./pond update
 ./pond build
 ./pond install-shell
 ./pond install-system
 ```
 
+`update --check` fetches all three repositories and shows incoming commits and
+changed file counts. It does not change source branches or install files. It
+also works with local edits, so you can inspect upstream before saving work.
+
 `update` fetches all three repositories. It rebases the local Pond commits onto
 upstream and fast-forwards the other repositories. It stops for uncommitted or
-untracked files. If a rebase has a conflict, resolve it in `pond-interface`,
+untracked files, detached checkouts, and unfinished Git operations. It checks
+the launcher and package manager for local commits before it changes any source
+branch. If a rebase has a conflict, resolve it in `pond-interface`,
 then run `git rebase --continue`. Run `./pond update` again after the rebase.
 The update does not install files until you run the install commands.
 
 `install-shell` writes tracked shell files into
-`~/.config/quickshell/pond-shell`. It records their hashes under
-`~/.local/state/pond-fedora` and refuses to overwrite local changes. On its
-first run it only adopts files that already match. Move edits into the Git
+`$XDG_CONFIG_HOME/quickshell/pond-shell`, or `~/.config/quickshell/pond-shell`
+when `XDG_CONFIG_HOME` is unset. It records their hashes under
+`$XDG_STATE_HOME/pond-fedora`, or `~/.local/state/pond-fedora` when
+`XDG_STATE_HOME` is unset. Each install target has a separate manifest.
+The installer refuses to overwrite local changes. On its
+first run it only adopts files that already match. It refuses symbolic links
+at the target or within its directory tree. Move edits into the Git
 checkout before installing. It leaves extra files and user settings in place.
 It also leaves files that upstream removed in place and reports their names.
 The shell reloads after changes. Check `qs log -c pond-shell -t 30` if it fails
@@ -64,3 +75,13 @@ is separate so it does not interrupt the launcher during the install.
 
 Use `JOBS=8 ./pond build` or `JOBS=8 ./pond build-launcher` to set parallelism.
 The default is four jobs. Build files are in `fedora-tools/.build`.
+
+## Workflow tests
+
+```sh
+cd fedora-tools
+python3 -m unittest discover -s tests -v
+```
+
+The tests use temporary homes and local Git repositories. They do not contact
+upstream, install system files, or restart the shell.

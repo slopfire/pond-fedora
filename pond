@@ -6,7 +6,7 @@ tools="$root/fedora-tools"
 source_dir="$root/pond-interface"
 build="$tools/.build"
 usage() {
-  printf '%s\n' 'Usage: ./pond {update|build|install-shell|install-system|build-launcher|install-launcher|status}'
+  printf '%s\n' 'Usage: ./pond {update [--check]|build|install-shell|install-system|build-launcher|install-launcher|status}'
 }
 case "${1:-}" in
 status)
@@ -17,16 +17,47 @@ status)
   done
   ;;
 update)
+  check_only=0
+  if [[ $# == 2 && $2 == --check ]]; then
+    check_only=1
+  elif [[ $# != 1 ]]; then
+    usage; exit 2
+  fi
   for repo in pond-interface vicinae package-manager; do
-    if [[ -n $(git -C "$root/$repo" status --porcelain) ]]; then
-      printf 'Uncommitted changes in %s. Commit or save them first.\n' "$repo" >&2; exit 1
+    if [[ $check_only == 1 ]]; then continue; fi
+    if ! git -C "$root/$repo" symbolic-ref --quiet HEAD >/dev/null; then
+      printf 'Detached HEAD in %s. Switch to the update branch first.\n' "$repo" >&2; exit 1
     fi
-    if [[ -n $(git -C "$root/$repo" status --porcelain --untracked-files=normal) ]]; then
-      printf 'Untracked files in %s. Save them first.\n' "$repo" >&2; exit 1
+    for operation in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_START; do
+      operation_path=$(git -C "$root/$repo" rev-parse --path-format=absolute --git-path "$operation")
+      if [[ -e $operation_path ]]; then
+        printf 'Unfinished Git operation in %s. Finish or abort it first.\n' "$repo" >&2; exit 1
+      fi
+    done
+    if [[ -n $(git -C "$root/$repo" status --porcelain --untracked-files=all) ]]; then
+      printf 'Uncommitted changes in %s. Commit or save them first.\n' "$repo" >&2; exit 1
     fi
   done
   for repo in pond-interface vicinae package-manager; do
-    git -C "$root/$repo" fetch origin main
+    git -C "$root/$repo" fetch origin refs/heads/main:refs/remotes/origin/main
+  done
+  if [[ $check_only == 1 ]]; then
+    for repo in pond-interface vicinae package-manager; do
+      printf '\n%s: %s upstream commits, %s local commits\n' "$repo" \
+        "$(git -C "$root/$repo" rev-list --count HEAD..origin/main)" \
+        "$(git -C "$root/$repo" rev-list --count origin/main..HEAD)"
+      git -C "$root/$repo" log -8 --format='%h %s' HEAD..origin/main
+      git -C "$root/$repo" diff --stat HEAD...origin/main
+    done
+    printf '\n%s\n' 'Fetched upstream refs. Source branches and installed files were not changed.'
+    exit 0
+  fi
+  # Check every fast-forward before rebasing Pond, so a diverged launcher does
+  # not leave only Pond updated.
+  for repo in vicinae package-manager; do
+    if ! git -C "$root/$repo" merge-base --is-ancestor HEAD origin/main; then
+      printf '%s has local commits. Review them before updating any source branch.\n' "$repo" >&2; exit 1
+    fi
   done
   git -C "$source_dir" rebase origin/main
   for repo in vicinae package-manager; do git -C "$root/$repo" merge --ff-only origin/main; done

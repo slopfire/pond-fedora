@@ -12,8 +12,13 @@ import tempfile
 root = Path(__file__).resolve().parents[2]
 repo = root / 'pond-interface'
 source = repo / 'shell'
-target = Path.home() / '.config/quickshell/pond-shell'
-state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'pond-fedora/shell-manifest.json'
+target = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'quickshell/pond-shell'
+state_dir = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'pond-fedora'
+manifest_name = 'shell-manifest.json'
+if target != Path.home() / '.config/quickshell/pond-shell':
+    target_hash = hashlib.sha256(os.fsencode(target.absolute())).hexdigest()
+    manifest_name = f'shell-manifest-{target_hash}.json'
+state = state_dir / manifest_name
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -29,7 +34,14 @@ for rel in files:
     if not src.is_file() or src.is_symlink():
         raise SystemExit(f'Invalid source file: {src}')
     new[key] = digest(src)
-    if dst.is_symlink() or (dst.exists() and not dst.is_file()):
+    parents = []
+    parent = dst.parent
+    while parent != target.parent:
+        parents.append(parent)
+        parent = parent.parent
+    if any(p.is_symlink() or (p.exists() and not p.is_dir()) for p in parents):
+        conflicts.append(key)
+    elif dst.is_symlink() or (dst.exists() and not dst.is_file()):
         conflicts.append(key)
     elif dst.exists():
         current = digest(dst)
