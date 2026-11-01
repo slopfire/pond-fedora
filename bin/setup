@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""Create upstream checkouts from the published source pins and Fedora patches."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+
+tools = Path(__file__).resolve().parents[1]
+root = tools.parent
+sources = json.loads((tools / 'sources.json').read_text())
+
+
+def git(repo, *args):
+    return subprocess.check_output(['git', '-C', str(repo), *args], text=True).strip()
+
+
+# Check all existing paths before creating any source checkout.
+for name in sources:
+    target = root / name
+    if target.is_symlink() or (target.exists() and not (target / '.git').exists()):
+        raise SystemExit(f'Refusing to replace {target}.')
+
+for name, source in sources.items():
+    target = root / name
+    if target.exists():
+        print(f'Kept existing checkout: {target}')
+        continue
+    with tempfile.TemporaryDirectory(prefix='.pond-source-', dir=root) as directory:
+        checkout = Path(directory) / name
+        subprocess.run(['git', 'clone', '--filter=blob:none', '--no-checkout', '--single-branch',
+                        source['url'], str(checkout)], check=True)
+        git(checkout, 'checkout', '-B', source['branch'], source['revision'])
+        patches = [str(tools / path) for path in source['patches']]
+        if patches:
+            git(checkout, 'am', *patches)
+        if git(checkout, 'rev-parse', 'HEAD^{tree}') != source['tree']:
+            raise SystemExit(f'The reconstructed {name} files do not match sources.json.')
+        os.replace(checkout, target)
+    print(f'Created {target}')
+
+for name in ('pond', 'README.md'):
+    link = root / name
+    if not link.exists() and not link.is_symlink():
+        link.symlink_to(Path(tools.name) / name)
+print(f'Sources are ready in {root}. No system or desktop files were installed.')

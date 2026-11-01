@@ -1,0 +1,605 @@
+From 2c658bf80cbab00f6ed831bea571a8028794ab62 Mon Sep 17 00:00:00 2001
+From: DillerOFire <niktofe1@gmail.com>
+Date: Sun, 1 Nov 2026 22:50:21 +1000
+Subject: [PATCH] Add Fedora package installs and updates through DNF5
+
+---
+ launcher-extension/package-lock.json |   6 +-
+ libpm/src/dnf.rs                     | 301 +++++++++++++++++++++++++++
+ libpm/src/flatpak.rs                 |  20 ++
+ libpm/src/lib.rs                     |  12 +-
+ libpm/src/search.rs                  |   6 +-
+ libpm/src/system.rs                  |  88 ++++++++
+ libpm/src/update.rs                  |  32 ++-
+ 7 files changed, 446 insertions(+), 19 deletions(-)
+ create mode 100644 libpm/src/dnf.rs
+ create mode 100644 libpm/src/system.rs
+
+diff --git a/launcher-extension/package-lock.json b/launcher-extension/package-lock.json
+index 00b6350a9480e30ac7148e6bddd5d46d93ad0024..96ec546d0571a615251a29a1ccb121eefe256cd4 100644
+--- a/launcher-extension/package-lock.json
++++ b/launcher-extension/package-lock.json
+@@ -577,9 +577,9 @@
+       "license": "MIT"
+     },
+     "node_modules/zod": {
+-      "version": "4.6.5",
+-      "resolved": "https://registry.npmjs.org/zod/-/zod-4.6.5.tgz",
+-      "integrity": "sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==",
++      "version": "4.6.7",
++      "resolved": "https://registry.npmjs.org/zod/-/zod-4.6.7.tgz",
++      "integrity": "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==",
+       "license": "MIT",
+       "funding": {
+         "url": "https://github.com/sponsors/colinhacks"
+diff --git a/libpm/src/dnf.rs b/libpm/src/dnf.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..49c2c421aac401c47a40ccd627dcce9f3dd927b5
+--- /dev/null
++++ b/libpm/src/dnf.rs
+@@ -0,0 +1,301 @@
++use std::{
++    collections::HashSet,
++    process::{Command, Output, Stdio},
++};
++
++use anyhow::{bail, ensure, Context, Result};
++use serde::Deserialize;
++
++use crate::{App, InstallOutcome};
++
++const DNF: &str = "/usr/bin/dnf5";
++
++fn command() -> Command {
++    let mut command = Command::new(DNF);
++    command.env("LC_ALL", "C").stdin(Stdio::null());
++    command
++}
++
++fn privileged_command() -> Command {
++    let mut command = Command::new("/usr/bin/pkexec");
++    command
++        .arg(DNF)
++        .arg("--assumeyes")
++        .env("LC_ALL", "C")
++        .stdin(Stdio::null());
++    command
++}
++
++fn failure(output: &Output, action: &str) -> anyhow::Error {
++    let diagnostic = if output.stderr.is_empty() {
++        &output.stdout
++    } else {
++        &output.stderr
++    };
++    let diagnostic: String = String::from_utf8_lossy(diagnostic)
++        .trim()
++        .chars()
++        .take(4096)
++        .collect();
++    anyhow::anyhow!("{action} failed ({}): {diagnostic}", output.status)
++}
++
++pub(crate) fn updates_available() -> Result<bool> {
++    let output = command()
++        .args(["--quiet", "check-upgrade"])
++        .output()
++        .context("checking DNF updates")?;
++    check_update_output(&output)
++}
++
++fn check_update_output(output: &Output) -> Result<bool> {
++    match output.status.code() {
++        Some(0) => Ok(false),
++        Some(100) => Ok(true),
++        _ => Err(failure(output, "checking DNF updates")),
++    }
++}
++
++pub(crate) fn update() -> Result<()> {
++    let output = privileged_command()
++        .args(["upgrade", "--refresh"])
++        .output()
++        .context("starting DNF upgrade through pkexec")?;
++    ensure!(
++        output.status.success(),
++        "{}",
++        failure(&output, "upgrading RPM packages")
++    );
++    Ok(())
++}
++
++pub(crate) fn install(package: &str) -> Result<InstallOutcome> {
++    let output = install_command(package)?
++        .output()
++        .with_context(|| format!("installing {package} through pkexec"))?;
++    ensure!(
++        output.status.success(),
++        "{}",
++        failure(&output, &format!("installing {package} with DNF"))
++    );
++    Ok(InstallOutcome::Installed)
++}
++
++fn install_command(package: &str) -> Result<Command> {
++    // Accept one repository package name. DNF also accepts paths, URLs, groups,
++    // and wildcard specs, which must not come from the app catalog.
++    ensure!(
++        package
++            .bytes()
++            .next()
++            .is_some_and(|c| c.is_ascii_alphanumeric())
++            && package
++                .bytes()
++                .all(|c| c.is_ascii_alphanumeric() || b"+._-".contains(&c)),
++        "invalid RPM package name {package:?}"
++    );
++    let mut command = privileged_command();
++    command.args(["install", "--", package]);
++    Ok(command)
++}
++
++#[derive(Deserialize)]
++struct RestartHint {
++    #[serde(rename = "type")]
++    kind: String,
++    reboot_required: bool,
++}
++
++pub(crate) fn restart_recommended() -> Result<bool> {
++    // The reboot hint only needs the installed RPM database. Disable remote
++    // repositories so this check cannot refresh metadata or ask to import keys.
++    let output = command()
++        .args([
++            "--cacheonly",
++            "--disable-repo=*",
++            "needs-restarting",
++            "--json",
++        ])
++        .output()
++        .context("checking the DNF reboot hint")?;
++    restart_output(&output)
++}
++
++fn restart_output(output: &Output) -> Result<bool> {
++    if !matches!(output.status.code(), Some(0 | 1)) {
++        return Err(failure(output, "checking the DNF reboot hint"));
++    }
++    let hints: Vec<RestartHint> = serde_json::from_slice(&output.stdout).with_context(|| {
++        format!(
++            "invalid DNF reboot hint: {}",
++            failure(output, "checking the DNF reboot hint")
++        )
++    })?;
++    let hint = hints
++        .iter()
++        .find(|hint| hint.kind == "reboot")
++        .context("DNF returned no reboot hint")?;
++    ensure!(
++        hint.reboot_required == (output.status.code() == Some(1)),
++        "DNF reboot hint and exit status disagree"
++    );
++    Ok(hint.reboot_required)
++}
++
++pub(crate) fn catalog(apps: Vec<App>) -> Result<Vec<App>> {
++    let output = command()
++        .args([
++            "--cacheonly",
++            "--quiet",
++            "repoquery",
++            "--available",
++            "--arch",
++        ])
++        .arg(format!("{},noarch", std::env::consts::ARCH))
++        .args(["--queryformat", "%{name}\n"])
++        .output()
++        .context("loading Fedora repository package names")?;
++    if !output.status.success() {
++        bail!(
++            "{}. Refresh repository metadata with dnf5 makecache, then try again",
++            failure(&output, "loading Fedora repository package names")
++        );
++    }
++    let names: HashSet<_> = std::str::from_utf8(&output.stdout)
++        .context("reading DNF package names")?
++        .lines()
++        .map(str::to_owned)
++        .collect();
++    Ok(catalog_for_packages(apps, &names))
++}
++
++fn catalog_for_packages(apps: Vec<App>, names: &HashSet<String>) -> Vec<App> {
++    apps.into_iter()
++        .filter_map(|mut app| {
++            if matches!(app.package_source.manager.as_str(), "pacman" | "aur") {
++                let package = match app.package_source.package.as_str() {
++                    "apache" => "httpd",
++                    "appstream-glib" => "libappstream-glib",
++                    "baloo" => "kf6-baloo",
++                    "brave-bin" => "brave-browser",
++                    "discover" => "plasma-discover",
++                    "gcc-fortran" => "gcc-gfortran",
++                    "github-cli" => "gh",
++                    "go" => "golang",
++                    "gptfdisk" => "gdisk",
++                    "graphicsmagick" => "GraphicsMagick",
++                    "gvim" => "vim-X11",
++                    "libreoffice-fresh" => "libreoffice",
++                    "zen-browser-bin" => "zen-browser",
++                    package => package,
++                };
++                if !names.contains(package) {
++                    return None;
++                }
++                app.package_source.package = package.to_owned();
++                app.package_source.manager = "dnf".into();
++            }
++            Some(app)
++        })
++        .collect()
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::os::unix::process::ExitStatusExt;
++
++    fn output(code: i32, stdout: &str, stderr: &str) -> Output {
++        Output {
++            status: std::process::ExitStatus::from_raw(code << 8),
++            stdout: stdout.into(),
++            stderr: stderr.into(),
++        }
++    }
++
++    #[test]
++    fn check_distinguishes_updates_no_updates_and_failures() {
++        assert!(!check_update_output(&output(0, "", "")).unwrap());
++        assert!(check_update_output(&output(100, "an update", "")).unwrap());
++        for code in [1, 2, 126, 127] {
++            let error =
++                check_update_output(&output(code, "", "repository unavailable")).unwrap_err();
++            assert!(error.to_string().contains("repository unavailable"));
++        }
++        let killed = Output {
++            status: std::process::ExitStatus::from_raw(9),
++            stdout: vec![],
++            stderr: vec![],
++        };
++        assert!(check_update_output(&killed).is_err());
++    }
++
++    #[test]
++    fn reboot_hint_requires_valid_json_and_matching_exit_status() {
++        let no = r#"[{"type":"reboot","reboot_required":false}]"#;
++        let yes = r#"[{"type":"reboot","reboot_required":true}]"#;
++        assert!(!restart_output(&output(0, no, "")).unwrap());
++        assert!(restart_output(&output(1, yes, "")).unwrap());
++        for (code, text) in [(1, ""), (1, no), (0, yes), (0, "[]"), (2, yes)] {
++            assert!(restart_output(&output(code, text, "plugin error")).is_err());
++        }
++    }
++
++    #[test]
++    fn install_uses_pkexec_with_one_package_and_rejects_other_specs() {
++        let command = install_command("example-app+plugin.x86_64").unwrap();
++        assert_eq!(command.get_program(), "/usr/bin/pkexec");
++        assert_eq!(
++            command.get_args().collect::<Vec<_>>(),
++            [
++                DNF,
++                "--assumeyes",
++                "install",
++                "--",
++                "example-app+plugin.x86_64"
++            ]
++        );
++        for package in [
++            "",
++            "--allowerasing",
++            "@desktop",
++            "a*",
++            "/tmp/app.rpm",
++            "https://example.invalid/a.rpm",
++            "a b",
++            "a;id",
++            "a\nb",
++        ] {
++            assert!(install_command(package).is_err(), "accepted {package:?}");
++        }
++    }
++
++    #[test]
++    fn catalog_reuses_metadata_and_only_maps_available_native_packages() {
++        let app = |id, manager: &str, package: &str| App {
++            id,
++            name: format!("App {id}"),
++            description: "upstream description".into(),
++            traffic: 42,
++            icon: Some("upstream-icon".into()),
++            package_source: crate::PackageSource {
++                manager: manager.into(),
++                package: package.into(),
++            },
++        };
++        let apps = vec![
++            app(1, "pacman", "libreoffice-fresh"),
++            app(2, "aur", "available-app"),
++            app(3, "pacman", "arch-only"),
++            app(4, "flatpak", "org.example.App"),
++        ];
++        let names = HashSet::from(["libreoffice".into(), "available-app".into()]);
++        let apps = catalog_for_packages(apps, &names);
++        assert_eq!(apps.iter().map(|a| a.id).collect::<Vec<_>>(), [1, 2, 4]);
++        assert_eq!(apps[0].package_source.manager, "dnf");
++        assert_eq!(apps[0].package_source.package, "libreoffice");
++        assert_eq!(apps[0].description, "upstream description");
++        assert_eq!(apps[0].icon.as_deref(), Some("upstream-icon"));
++        assert_eq!(apps[2].package_source.manager, "flatpak");
++    }
++}
+diff --git a/libpm/src/flatpak.rs b/libpm/src/flatpak.rs
+index 5e4e33b85d182758c3430481e6cd1a0b805d9f6b..35e73d7d10e5db15664c4527b9626d745a7a38ed 100644
+--- a/libpm/src/flatpak.rs
++++ b/libpm/src/flatpak.rs
+@@ -11,6 +11,26 @@ use crate::InstallOutcome;
+ const REMOTE: &str = "flathub";
+ const BRANCH: &str = "stable";
+ 
++pub(crate) fn updates_available() -> Result<bool> {
++    for scope in ["--system", "--user"] {
++        let output = Command::new("flatpak")
++            .args([scope, "remote-ls", "--updates", "--columns=application"])
++            .stdin(Stdio::null())
++            .output()
++            .context("checking Flatpak updates")?;
++        ensure!(
++            output.status.success(),
++            "checking Flatpak updates failed ({}): {}",
++            output.status,
++            String::from_utf8_lossy(&output.stderr).trim()
++        );
++        if !output.stdout.is_empty() {
++            return Ok(true);
++        }
++    }
++    Ok(false)
++}
++
+ pub(crate) fn update() -> Result<()> {
+     let status = Command::new("flatpak")
+         .args(["update", "--assumeyes"])
+diff --git a/libpm/src/lib.rs b/libpm/src/lib.rs
+index f8c46ce6a2bc52746cdec0a0d5cfde0fce50eb5f..d26fa28b674034d341d375599c07e6daff6e13ae 100644
+--- a/libpm/src/lib.rs
++++ b/libpm/src/lib.rs
+@@ -1,10 +1,12 @@
+ //! Package management library.
+ 
++mod dnf;
+ mod flatpak;
+ mod install_status;
+ mod nix;
+ mod paru;
+ mod search;
++mod system;
+ mod update;
+ 
+ use anyhow::{anyhow, Context, Result};
+@@ -32,7 +34,9 @@ pub struct App {
+ 
+ impl App {
+     pub fn icon_path(&self) -> Option<String> {
+-        self.icon.as_ref().map(|hash| format!("{ICON_DIR}/{hash}.webp"))
++        self.icon
++            .as_ref()
++            .map(|hash| format!("{ICON_DIR}/{hash}.webp"))
+     }
+ }
+ 
+@@ -55,7 +59,10 @@ pub struct PackageManager {
+ 
+ impl PackageManager {
+     pub fn init() -> Result<Self> {
+-        let apps: Vec<App> = serde_json::from_slice(CATALOG).context("parsing catalog.json")?;
++        let mut apps: Vec<App> = serde_json::from_slice(CATALOG).context("parsing catalog.json")?;
++        if system::SystemPackageManager::detect()? == system::SystemPackageManager::Dnf {
++            apps = dnf::catalog(apps)?;
++        }
+         let search = search::Search::build(&apps)?;
+ 
+         Ok(Self { apps, search })
+@@ -79,6 +86,7 @@ impl PackageManager {
+         let status = install_status::InstallStatus::start(app);
+         let result = match app.package_source.manager.as_str() {
+             "flatpak" => flatpak::install(&app.package_source.package, status.progress()),
++            "dnf" => dnf::install(&app.package_source.package),
+             "nix" => nix::install(&app.package_source.package),
+             "pacman" | "aur" => paru::install(&app.package_source.package, status.progress()),
+             manager => Err(anyhow!("package manager {manager:?} is not supported")),
+diff --git a/libpm/src/search.rs b/libpm/src/search.rs
+index ec3892d757843562081b6d949792f4c2886cd3ac..96827ad8cf09f6940ed960c992f913a84410db8c 100644
+--- a/libpm/src/search.rs
++++ b/libpm/src/search.rs
+@@ -46,7 +46,7 @@ impl Search {
+     pub(crate) fn query(&self, query: &str, limit: usize) -> Result<Vec<u64>> {
+         let transaction = self.index.read_txn()?;
+         let fields = self.index.fields_ids_map(&transaction)?;
+-        let progress = Progress::default();
++        let progress = Progress;
+         let mut search = self.index.search(&transaction, &fields, &progress);
+         search.query(query).limit(limit);
+ 
+@@ -109,7 +109,7 @@ fn index_documents(index: &Index, documents: &File) -> Result<()> {
+         None,
+         &mut new_fields,
+         &MustStopProcessing::default(),
+-        Progress::default(),
++        Progress,
+     )?;
+     if let Some(error) = statistics.into_iter().find_map(|statistic| statistic.error) {
+         return Err(error.into());
+@@ -128,7 +128,7 @@ fn index_documents(index: &Index, documents: &File) -> Result<()> {
+                 primary_key,
+                 &changes,
+                 &MustStopProcessing::default(),
+-                &Progress::default(),
++                &Progress,
+             )
+         })
+         .expect("indexing thread panicked")?;
+diff --git a/libpm/src/system.rs b/libpm/src/system.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..b6aff49034c8708b67f82638acf24464a969afe5
+--- /dev/null
++++ b/libpm/src/system.rs
+@@ -0,0 +1,88 @@
++use std::fs;
++
++use anyhow::{Context, Result};
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub(crate) enum SystemPackageManager {
++    Dnf,
++    Paru,
++}
++
++impl SystemPackageManager {
++    pub(crate) fn detect() -> Result<Self> {
++        let release = fs::read_to_string("/etc/os-release").context("reading /etc/os-release")?;
++        Ok(Self::from_os_release(&release))
++    }
++
++    fn from_os_release(release: &str) -> Self {
++        for line in release.lines() {
++            if let Some((key, value)) = line.split_once('=') {
++                if matches!(key.trim(), "ID" | "ID_LIKE")
++                    && value
++                        .trim()
++                        .trim_matches(['\'', '"'])
++                        .split_whitespace()
++                        .any(|id| id == "fedora")
++                {
++                    return Self::Dnf;
++                }
++            }
++        }
++        Self::Paru
++    }
++
++    pub(crate) fn name(self) -> &'static str {
++        match self {
++            Self::Dnf => "DNF",
++            Self::Paru => "Paru",
++        }
++    }
++
++    pub(crate) fn update(self) -> Result<()> {
++        match self {
++            Self::Dnf => crate::dnf::update(),
++            Self::Paru => crate::paru::update(),
++        }
++    }
++
++    pub(crate) fn restart_recommended(self) -> Result<bool> {
++        match self {
++            Self::Dnf => crate::dnf::restart_recommended(),
++            Self::Paru => crate::update::restart_recommended(),
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn fedora_and_its_derivatives_use_dnf() {
++        for release in [
++            "ID=fedora\n",
++            "ID=\"fedora\"\n",
++            "ID=example\nID_LIKE=\"rhel fedora\"\n",
++        ] {
++            assert_eq!(
++                SystemPackageManager::from_os_release(release),
++                SystemPackageManager::Dnf
++            );
++        }
++    }
++
++    #[test]
++    fn other_systems_keep_the_upstream_backend() {
++        for release in [
++            "ID=arch\n",
++            "ID=endeavouros\nID_LIKE=arch\n",
++            "NAME=Fedora\nID=example\n",
++            "ID=not-fedora\n",
++        ] {
++            assert_eq!(
++                SystemPackageManager::from_os_release(release),
++                SystemPackageManager::Paru
++            );
++        }
++    }
++}
+diff --git a/libpm/src/update.rs b/libpm/src/update.rs
+index 7bb962d9f248066760c1de870f605ea2d41ac5b1..30dd2d8f67010b3d78aa71c5a765301315c2d23a 100644
+--- a/libpm/src/update.rs
++++ b/libpm/src/update.rs
+@@ -2,7 +2,13 @@ use std::{fs, path::Path, process::Command, thread};
+ 
+ use anyhow::{anyhow, bail, Context, Result};
+ 
++use crate::system::SystemPackageManager;
++
+ pub fn updates_available() -> Result<bool> {
++    if SystemPackageManager::detect()? == SystemPackageManager::Dnf {
++        let native = crate::dnf::updates_available()?;
++        return Ok(native || crate::flatpak::updates_available()?);
++    }
+     let output = Command::new("checkupdates")
+         .output()
+         .context("running checkupdates")?;
+@@ -18,26 +24,30 @@ pub fn updates_available() -> Result<bool> {
+ }
+ 
+ pub fn update() -> Result<bool> {
+-    let (paru, flatpak) = thread::scope(|scope| {
+-        let paru = scope.spawn(crate::paru::update);
++    let manager = SystemPackageManager::detect()?;
++    let (native, flatpak) = thread::scope(|scope| {
++        let native = scope.spawn(|| manager.update());
+         let flatpak = crate::flatpak::update();
+-        let paru = paru
++        let native = native
+             .join()
+-            .unwrap_or_else(|_| Err(anyhow!("Paru update worker panicked")));
+-        (paru, flatpak)
++            .unwrap_or_else(|_| Err(anyhow!("{} update worker panicked", manager.name())));
++        (native, flatpak)
+     });
+ 
+-    match (paru, flatpak) {
+-        (Ok(()), Ok(())) => Ok(restart_recommended().unwrap_or(false)),
+-        (Err(error), Ok(())) => Err(error.context("Paru update failed")),
++    match (native, flatpak) {
++        (Ok(()), Ok(())) => manager.restart_recommended(),
++        (Err(error), Ok(())) => Err(error.context(format!("{} update failed", manager.name()))),
+         (Ok(()), Err(error)) => Err(error.context("Flatpak update failed")),
+-        (Err(paru), Err(flatpak)) => {
+-            bail!("Paru update failed: {paru:#}\nFlatpak update failed: {flatpak:#}")
++        (Err(native), Err(flatpak)) => {
++            bail!(
++                "{} update failed: {native:#}\nFlatpak update failed: {flatpak:#}",
++                manager.name()
++            )
+         }
+     }
+ }
+ 
+-fn restart_recommended() -> Result<bool> {
++pub(crate) fn restart_recommended() -> Result<bool> {
+     let kernel = fs::read_to_string("/proc/sys/kernel/osrelease")?;
+     if !Path::new("/usr/lib/modules")
+         .join(kernel.trim())

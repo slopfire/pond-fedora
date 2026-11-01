@@ -1,5 +1,29 @@
 # Pond on Fedora
 
+Fedora build tools, source pins, and patches for the Butterfly Pond desktop.
+The public repository is [slopfire/pond-fedora](https://github.com/slopfire/pond-fedora).
+
+## Get the sources
+
+```sh
+git clone https://github.com/slopfire/pond-fedora.git pond-fedora/fedora-tools
+cd pond-fedora
+./fedora-tools/pond setup
+./pond status
+```
+
+`setup` clones the upstream repositories at the revisions in `sources.json`,
+applies the published Fedora patches, and checks the resulting source trees.
+Git must have a user name and email configured to apply patches with `git am`.
+The command keeps existing checkouts and refuses other paths with the same names.
+It does not install dependencies, modify desktop settings, or change system files.
+
+The repository includes all local source changes as patches. Upstream source
+repositories, build outputs, credentials, local settings, and usage snapshots
+are not included. The source checkouts use their upstream repositories as `origin`.
+
+## Workspace
+
 This directory keeps the installed Pond components in separate repositories.
 It is for this Fedora port. It does not configure a new desktop session or
 install the niri configuration, fonts, cursor theme, or desktop dependencies.
@@ -12,7 +36,7 @@ install the niri configuration, fonts, cursor theme, or desktop dependencies.
 - `fedora-tools` has the build, update, and install commands below. Its `pm`
   command forwards to the built upstream CLI.
 
-Run commands from `~/Projects/pond-fedora`.
+Run the commands below from the workspace directory that contains `fedora-tools`.
 
 ## Update
 
@@ -36,6 +60,11 @@ It checks the launcher for local commits before it changes any source branch.
 If a rebase has a conflict, resolve it in `pond-interface` or `package-manager`,
 then run `git rebase --continue`. Run `./pond update` again after the rebase.
 The update does not install files until you run the install commands.
+
+`update` changes the local source checkouts. The published `sources.json` and
+patch files remain the tested snapshot until they are updated in this repository.
+To reproduce a newer published Fedora snapshot, clone this repository into a new
+workspace and run `setup`. Existing checkouts keep their local Fedora patches.
 
 `install-shell` writes tracked shell files into
 `$XDG_CONFIG_HOME/quickshell/pond-shell`, or `~/.config/quickshell/pond-shell`
@@ -128,3 +157,11 @@ python3 -m unittest discover -s tests -v
 
 The tests use temporary homes and local Git repositories. They do not contact
 upstream, install system files, or restart the shell.
+
+## Upstream and licenses
+
+The source pins refer to [Pond](https://github.com/bflycomputer/pond-interface),
+[the package manager](https://github.com/bflycomputer/package-manager), and
+[the Butterfly Vicinae fork](https://github.com/bflycomputer/vicinae).
+Their license texts are preserved under `licenses/`. The Codexbar patch keeps
+its provider icon license. Other bundled notices remain in the source checkouts.

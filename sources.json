@@ -1,0 +1,27 @@
+{
+  "pond-interface": {
+    "url": "https://github.com/bflycomputer/pond-interface.git",
+    "revision": "5352d71e3dd318e9aaeb9b70baadad67698d8f11",
+    "branch": "fedora",
+    "tree": "2072b598487ceae329dea1d45144e297193d8341",
+    "patches": [
+      "patches/pond-interface/0001-Add-local-Codexbar-integration.patch"
+    ]
+  },
+  "package-manager": {
+    "url": "https://github.com/bflycomputer/package-manager.git",
+    "revision": "805bebd15b5f617302be823a75e3d64762dbb7f2",
+    "branch": "fedora",
+    "tree": "3a8eb2ad1e9e2afe6ced955399705584e00bd504",
+    "patches": [
+      "patches/package-manager/0001-Add-Fedora-package-installs-and-updates-through-DNF5.patch"
+    ]
+  },
+  "vicinae": {
+    "url": "https://github.com/bflycomputer/vicinae.git",
+    "revision": "12d46a413f8db83073fef25e2da35a69bbcfb371",
+    "branch": "main",
+    "tree": "b58af26b6d5ca2964d714186f6b2cb39a99bf0b2",
+    "patches": []
+  }
+}

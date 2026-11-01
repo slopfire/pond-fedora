@@ -33,6 +33,7 @@ class WorkflowTest(unittest.TestCase):
         shutil.copy2(TOOLS / 'pm', tools / 'pm')
         shutil.copy2(TOOLS / 'bin/install-shell', tools / 'bin/install-shell')
         shutil.copy2(TOOLS / 'bin/install-extension', tools / 'bin/install-extension')
+        shutil.copy2(TOOLS / 'bin/setup', tools / 'bin/setup')
 
     def run_command(self, *args):
         return subprocess.run(args, env=self.env, cwd=self.root, text=True,
@@ -293,6 +294,64 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('share/pond-pm/icons/example.webp', result.stdout)
         self.assertIn('libexec/pond/pm', result.stdout)
         self.assertFalse(self.extension_target().exists())
+
+    def publication_checkout(self):
+        self.setup_sources()
+        workspace = self.root / 'published-workspace'
+        tools = workspace / 'fedora-tools'
+        (tools / 'bin').mkdir(parents=True)
+        shutil.copy2(TOOLS / 'pond', tools / 'pond')
+        shutil.copy2(TOOLS / 'bin/setup', tools / 'bin/setup')
+        (tools / 'README.md').write_text('Published tools\n')
+        sources = {}
+        for name in REPOS:
+            origin = self.root / 'origins' / name
+            repo = self.root / name
+            base = self.git(origin, 'rev-parse', 'HEAD')
+            patches = []
+            if name != 'vicinae':
+                path = tools / 'patches' / f'{name}.patch'
+                path.parent.mkdir(exist_ok=True)
+                path.write_text(self.git(repo, 'format-patch', '--stdout', f'{base}..HEAD') + '\n')
+                patches.append(str(path.relative_to(tools)))
+            sources[name] = {'url': str(origin), 'revision': base,
+                             'branch': 'main' if name == 'vicinae' else 'fedora',
+                             'tree': self.git(repo, 'rev-parse', 'HEAD^{tree}'),
+                             'patches': patches}
+        (tools / 'sources.json').write_text(json.dumps(sources))
+        return workspace, tools, sources
+
+    def test_setup_reconstructs_pinned_sources_and_links_workspace_commands(self):
+        workspace, tools, sources = self.publication_checkout()
+        result = self.run_command(str(tools / 'pond'), 'setup')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        for name, source in sources.items():
+            self.assertEqual(self.git(workspace / name, 'rev-parse', 'HEAD^{tree}'), source['tree'])
+        self.assertTrue((workspace / 'pond').samefile(tools / 'pond'))
+        self.assertTrue((workspace / 'README.md').samefile(tools / 'README.md'))
+        edited = workspace / 'pond-interface/shell/main.qml'
+        edited.write_text('local work\n')
+        result = self.run_command(str(tools / 'pond'), 'setup')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(edited.read_text(), 'local work\n')
+
+    def test_setup_refuses_conflicting_paths_before_cloning(self):
+        workspace, tools, _ = self.publication_checkout()
+        (workspace / 'vicinae').mkdir()
+        (workspace / 'vicinae/notes.txt').write_text('keep\n')
+        result = self.run_command(str(tools / 'pond'), 'setup')
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertFalse((workspace / 'pond-interface').exists())
+        self.assertEqual((workspace / 'vicinae/notes.txt').read_text(), 'keep\n')
+
+    def test_setup_rejects_a_source_tree_that_does_not_match_the_pin(self):
+        workspace, tools, sources = self.publication_checkout()
+        sources['pond-interface']['tree'] = '0' * 40
+        (tools / 'sources.json').write_text(json.dumps(sources))
+        result = self.run_command(str(tools / 'pond'), 'setup')
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('do not match sources.json', result.stdout)
+        self.assertFalse((workspace / 'pond-interface').exists())
 
 
 if __name__ == '__main__':
