@@ -97,6 +97,37 @@ the current user's Vicinae extensions. It does not delete shell or system files.
 The system files are not tracked by RPM. This is an update workflow for the
 existing port, not a complete installer for a fresh Fedora system.
 
+## Login and lock screens
+
+The Pond lockscreen is available in Niri with `Super+L` when the Pond Niri
+bindings are enabled. It uses the installed Pond system files and PAM.
+
+To select the Pond login screen on a system with SDDM, KWin's Wayland greeter,
+and the Pond system files installed, run:
+
+```sh
+POND_DRY_RUN=1 ./pond install-dm
+sudo ./pond install-dm
+```
+
+The command installs a root-owned SDDM theme and selects SDDM for the next boot.
+It leaves the running display manager and session alone. It keeps other SDDM
+settings and refuses conflicting theme configuration or unexpected files. It
+requires Fedora's installed Pond QML modules and SELinux tools. Test the
+login after a reboot. The preview uses a mock backend and does not test PAM.
+To select Plasma Login Manager again, run:
+
+```sh
+sudo systemctl enable --force plasmalogin.service
+```
+
+If login fails after reboot, switch to a text console with `Ctrl+Alt+F3`,
+sign in, run that command, and reboot.
+
+Remove `/etc/sddm.conf.d/zz-pond-fedora.conf` to restore
+the previous SDDM theme selection. Do not restart a display manager in a
+running desktop session.
+
 ## App installer and updates
 
 ```sh

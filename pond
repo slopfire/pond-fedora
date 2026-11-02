@@ -13,7 +13,7 @@ check_package_manager_build() {
   done
 }
 usage() {
-  printf '%s\n' 'Usage: ./pond {setup|update [--check]|build|install-shell|install-system|build-package-manager|install-package-manager|build-launcher|install-launcher|status}'
+  printf '%s\n' 'Usage: ./pond {setup|update [--check]|build|install-shell|install-system|install-dm|build-package-manager|install-package-manager|build-launcher|install-launcher|status}'
 }
 case "${1:-}" in
 setup) exec "$tools/bin/setup" ;;
@@ -81,6 +81,7 @@ build)
   "$script" build-package-manager
   ;;
 install-shell) exec "$tools/bin/install-shell" ;;
+install-dm) exec "$tools/bin/install-dm" ;;
 install-system)
   check_package_manager_build
   [[ -f "$build/system-built" && $(<"$build/system-built") == "$(git -C "$source_dir" rev-parse HEAD)" && -z $(git -C "$source_dir" status --porcelain) ]] || { printf '%s\n' 'Pond source changed or is not built. Commit changes and run ./pond build.' >&2; exit 1; }

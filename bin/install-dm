@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""Install Pond's SDDM theme and select SDDM for the next boot."""
+import configparser
+import hashlib
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+
+SOURCE = Path(__file__).resolve().parents[2] / 'pond-interface'
+DESTINATION = Path('/usr/local/share/pond-dm')
+CONFIG = Path('/etc/sddm.conf.d/zz-pond-fedora.conf')
+CONFIG_TEXT = '[Theme]\nThemeDir=/usr/local/share/pond-dm/lockscreen\nCurrent=greeter\n'
+
+
+def fail(message):
+    raise SystemExit(message)
+
+
+def files(directory):
+    if directory.is_symlink() or not directory.is_dir():
+        fail(f'Invalid source directory: {directory}')
+    found = {}
+    for path in directory.rglob('*'):
+        if path.is_symlink() or not (path.is_dir() or path.is_file()):
+            fail(f'Refusing non-regular source: {path}')
+        if path.is_file():
+            found[path.relative_to(directory)] = path
+    return found
+
+
+def secure(path, uid=0, boundary=Path("/")):
+    """Reject paths that an unprivileged user can replace or edit."""
+    for part in (path, *path.parents):
+        if part == boundary.parent and boundary != Path("/"):
+            break
+        if part.is_symlink():
+            fail(f'Refusing symbolic link: {part}')
+        if not part.exists():
+            continue
+        st = part.stat()
+        if st.st_uid != uid or st.st_mode & 0o022:
+            fail(f'Insecure ownership or permissions: {part}')
+
+
+def theme_values(path):
+    if not path.exists():
+        return {}
+    if path.is_symlink() or not path.is_file():
+        fail(f'Refusing configuration path: {path}')
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        parser.read(path)
+    except (configparser.Error, UnicodeError) as exc:
+        fail(f'Cannot read SDDM configuration {path}: {exc}')
+    if not parser.has_section('Theme'):
+        return {}
+    return {key: parser.get('Theme', key) for key in ('Current', 'ThemeDir')
+            if parser.has_option('Theme', key)}
+
+
+def prepare(source=SOURCE, root=Path('/'), uid=0):
+    target = root / DESTINATION.relative_to('/')
+    config = root / CONFIG.relative_to('/')
+    secure(target.parent, uid, root)
+    secure(config.parent, uid, root)
+    if not target.parent.is_dir() or not config.parent.is_dir():
+        fail('The system theme or SDDM configuration directory is missing.')
+    for name in ('System/qmldir', 'System/libpond_systemplugin.so',
+                 'System/libpond_system.so', 'Daylight/qmldir',
+                 'Daylight/Sky.qml', 'Daylight/SkyState.js', 'Daylight/sky.frag.qsb'):
+        module = root / 'usr/lib64/qt6/qml/Pond' / name
+        secure(module, uid, root)
+        if not module.is_file():
+            fail(f'Missing Pond QML module: {module}. Build and install Pond first.')
+    result = {}
+    for subtree in ('lockscreen/frontend', 'lockscreen/greeter', 'shell/assets/fonts'):
+        base = source / subtree
+        for relative, path in files(base).items():
+            result[Path(subtree) / relative] = path
+    for required in ('lockscreen/greeter/Main.qml', 'lockscreen/greeter/metadata.desktop',
+                     'lockscreen/frontend/Screen.qml', 'shell/assets/fonts/IBMPlexSerif-Regular.ttf',
+                     'shell/assets/fonts/OFL-IBM-Plex.txt'):
+        if Path(required) not in result:
+            fail(f'Missing Pond theme file: {required}')
+    # Later drop-ins and the compatibility file override this drop-in.
+    for path in sorted(config.parent.iterdir()):
+        if path.name.startswith('.') or path.is_dir():
+            continue
+        if path.name > config.name and theme_values(path):
+            fail(f'Conflicting later SDDM theme settings: {path}')
+    if theme_values(root / 'etc/sddm.conf'):
+        fail('Theme settings in /etc/sddm.conf override the Pond drop-in.')
+    if config.is_symlink() or (config.exists() and (not config.is_file() or config.read_text() != CONFIG_TEXT)):
+        fail(f'Refusing to replace SDDM configuration: {config}')
+    if config.exists():
+        secure(config, uid, root)
+    if target.exists() or target.is_symlink():
+        secure(target, uid, root)
+        existing = files(target)
+        if set(existing) != set(result):
+            fail(f'Existing Pond theme differs: {target}')
+        for name, path in existing.items():
+            secure(path, uid, root)
+            if hashlib.sha256(path.read_bytes()).digest() != hashlib.sha256(result[name].read_bytes()).digest():
+                fail(f'Existing Pond theme differs: {path}')
+    return target, config, result
+
+
+def display_manager(root=Path('/')):
+    alias = root / 'etc/systemd/system/display-manager.service'
+    if not alias.is_symlink():
+        fail(f'Refusing to replace an unmanaged display manager: {alias}')
+    service = Path(os.readlink(alias)).name
+    if service not in ('plasmalogin.service', 'sddm.service'):
+        fail(f'Unsupported current display manager: {service}')
+    return service
+
+
+def enable_sddm(previous):
+    if previous == 'sddm.service':
+        return
+    try:
+        subprocess.run(['systemctl', 'enable', '--force', 'sddm.service'], check=True)
+        if display_manager() != 'sddm.service':
+            raise RuntimeError('The display manager link does not select SDDM.')
+    except (subprocess.CalledProcessError, RuntimeError, SystemExit):
+        subprocess.run(['systemctl', 'enable', '--force', previous], check=True)
+        raise
+
+
+def install(source=SOURCE, root=Path('/'), dry_run=False, uid=0):
+    target, config, selected = prepare(source, root, uid)
+    previous = display_manager(root)
+    if dry_run:
+        print(f'Would install {len(selected)} files in {target}.')
+        print(f'Would select Pond in {config}.')
+        print(f'Would select SDDM for the next boot (currently {previous}).')
+        print('The active display manager would not be restarted.')
+        return
+    if os.geteuid() != 0:
+        fail('Run install-dm as root, or set POND_DRY_RUN=1 to inspect the plan.')
+    if not shutil.which('getenforce'):
+        fail('getenforce is required to check SELinux. No files were installed.')
+    enforcing = subprocess.run(['getenforce'], capture_output=True, text=True, check=False)
+    if enforcing.returncode != 0:
+        fail('Cannot determine SELinux mode. No files were installed.')
+    if enforcing.stdout.strip() != 'Disabled' and not shutil.which('restorecon'):
+        fail('restorecon is required when SELinux is enabled.')
+    if not target.exists():
+        with tempfile.TemporaryDirectory(prefix='.pond-dm-', dir=target.parent) as temp:
+            stage = Path(temp) / 'theme'
+            stage.mkdir(mode=0o755)
+            for name, source_file in selected.items():
+                out = stage / name
+                out.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                shutil.copyfile(source_file, out)
+                out.chmod(0o644)
+            for directory in (stage, *(p for p in stage.rglob('*') if p.is_dir())):
+                directory.chmod(0o755)
+            os.replace(stage, target)
+    if enforcing.stdout.strip() != 'Disabled':
+        subprocess.run(['restorecon', '-RF', str(target)], check=True)
+    if not config.exists():
+        fd, temp = tempfile.mkstemp(prefix='.pond-dm-', dir=config.parent)
+        try:
+            with os.fdopen(fd, 'w') as stream:
+                stream.write(CONFIG_TEXT)
+            os.chmod(temp, 0o644)
+            os.replace(temp, config)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
+        if enforcing.stdout.strip() != 'Disabled':
+            subprocess.run(['restorecon', str(config)], check=True)
+    enable_sddm(previous)
+    print(f'Installed Pond SDDM theme in {target} and selected it in {config}.')
+    print('SDDM is selected for the next boot. The active session was not restarted.')
+    print('To restore Plasma Login Manager: sudo systemctl enable --force plasmalogin.service')
+
+
+if __name__ == '__main__':
+    install(dry_run=os.environ.get('POND_DRY_RUN') == '1')
