@@ -3,9 +3,10 @@
     "url": "https://github.com/bflycomputer/pond-interface.git",
     "revision": "5352d71e3dd318e9aaeb9b70baadad67698d8f11",
     "branch": "fedora",
-    "tree": "2072b598487ceae329dea1d45144e297193d8341",
+    "tree": "e559b5faa45dafafad5c8c966b7dd6059b0db61a",
     "patches": [
-      "patches/pond-interface/0001-Add-local-Codexbar-integration.patch"
+      "patches/pond-interface/0001-Add-local-Codexbar-integration.patch",
+      "patches/pond-interface/0002-Use-IBM-Plex-Serif-for-Pond-titles.patch"
     ]
   },
   "package-manager": {

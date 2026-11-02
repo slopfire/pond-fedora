@@ -80,6 +80,12 @@ The shell reloads after changes. Check `qs log -c pond-shell -t 30` if it fails
 to load. This repository does not contain the local Codexbar configuration or
 real usage snapshots. The existing files stay on this machine.
 
+The shell loads the bundled IBM Plex Serif font for titles. The font comes from
+the Pond system archive and uses the SIL Open Font License 1.1. It is an open
+substitute for Pond Gramercy. Onest and IBM Plex Mono remain the body and
+monospace fonts. The lockscreen uses the same title font after `install-system`.
+The font and its license are in `shell/assets/fonts` in the Pond checkout.
+
 `build` builds the native shell modules and package manager. It needs CMake,
 a C++ compiler, Qt 6.11 development files,
 KF6 NetworkManagerQt development files, Wayland development files and
