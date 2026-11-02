@@ -153,12 +153,13 @@ at `/usr/local/bin/pm`. It copies upstream catalog icons to
 hashes before replacement and refuses local edits. Bundle replacement removes
 obsolete generated files and causes Vicinae to scan the new bundle.
 
-On Fedora, `libpm` reuses upstream catalog entries and searches configured DNF
-repository metadata for native package names. It maps known renamed packages
-and hides native entries without an available Fedora package. Flatpak entries
-keep the upstream Flathub source. Native search uses cached metadata. Run
-`dnf5 makecache` if DNF reports that its cache is missing. The existing Flatpak
-backend needs a system Flathub remote to install Flatpak apps.
+On Fedora, `libpm` searches native packages in the configured DNF repositories
+and reuses upstream catalog details where package names match. It maps known
+renamed packages and hides upstream native entries without an available Fedora
+package. Native search uses cached metadata. Run `dnf5 makecache` if DNF reports
+that its cache is missing. Flatpak entries keep the upstream Flathub source and
+need a system Flathub remote. The shell shows DNF download progress when DNF
+reports an aggregate percentage.
 
 `pm -a` checks DNF and Flatpak updates. It prints `true` or `false` only after a
 successful check and returns a nonzero status on errors. `pm -u` updates native
