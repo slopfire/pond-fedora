@@ -1,28 +1,31 @@
 {
   "pond-interface": {
     "url": "https://github.com/bflycomputer/pond-interface.git",
-    "revision": "5352d71e3dd318e9aaeb9b70baadad67698d8f11",
+    "revision": "781b65784f79f70278a632fdd17838527be50473",
     "branch": "fedora",
-    "tree": "e559b5faa45dafafad5c8c966b7dd6059b0db61a",
+    "tree": "d8b0bb952bc953d815d31413fd8298a7a07de342",
     "patches": [
       "patches/pond-interface/0001-Add-local-Codexbar-integration.patch",
-      "patches/pond-interface/0002-Use-IBM-Plex-Serif-for-Pond-titles.patch"
+      "patches/pond-interface/0002-Use-IBM-Plex-Serif-for-Pond-titles.patch",
+      "patches/pond-interface/0003-Keep-Fedora-support-for-the-updated-shell.patch",
+      "patches/pond-interface/0004-Use-current-theme-properties-in-Codexbar.patch"
     ]
   },
   "package-manager": {
     "url": "https://github.com/bflycomputer/package-manager.git",
-    "revision": "805bebd15b5f617302be823a75e3d64762dbb7f2",
+    "revision": "966854877928e17188f1b1d744211cc5d5eea9fa",
     "branch": "fedora",
-    "tree": "3a8eb2ad1e9e2afe6ced955399705584e00bd504",
+    "tree": "f30a53fe8941a2c62ebf8965bc5e76068a809e22",
     "patches": [
-      "patches/package-manager/0001-Add-Fedora-package-installs-and-updates-through-DNF5.patch"
+      "patches/package-manager/0001-Add-Fedora-package-installs-and-updates-through-DNF5.patch",
+      "patches/package-manager/0002-Add-Fedora-package-search-and-install-progress.patch"
     ]
   },
   "vicinae": {
     "url": "https://github.com/bflycomputer/vicinae.git",
-    "revision": "12d46a413f8db83073fef25e2da35a69bbcfb371",
+    "revision": "68847f4b70ecf2a723859d39032e857dccb7691c",
     "branch": "main",
-    "tree": "b58af26b6d5ca2964d714186f6b2cb39a99bf0b2",
+    "tree": "ba5ff46ba772a9982e1733229158920dd7124fbe",
     "patches": []
   }
 }

@@ -1,0 +1,500 @@
+From 40a7fc42e6099bd7577eecaa0b2b35b6d338f2c7 Mon Sep 17 00:00:00 2001
+From: DillerOFire <niktofe1@gmail.com>
+Date: Mon, 2 Nov 2026 15:42:05 +1000
+Subject: [PATCH] Add Fedora package search and install progress
+
+---
+ Cargo.lock       |   1 +
+ libpm/Cargo.toml |   1 +
+ libpm/src/dnf.rs | 249 +++++++++++++++++++++++++++++++++++++++++++----
+ libpm/src/lib.rs | 118 ++++++++++++++++++++--
+ 4 files changed, 344 insertions(+), 25 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index eff91fe3fd221f6c2de0b6153ae8a52b86a30585..0c2c45d41018821f10faf5f2e24163271aadd4bc 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1320,6 +1320,7 @@ version = "0.1.0"
+ dependencies = [
+  "anyhow",
+  "bumpalo",
++ "libc",
+  "libflatpak",
+  "memmap2",
+  "milli",
+diff --git a/libpm/Cargo.toml b/libpm/Cargo.toml
+index 1fddadb11e86d61e15ce3443ea4f9e47b7d1e33e..eb6057449d88afc5dd8e0386f3be6143753eba7c 100644
+--- a/libpm/Cargo.toml
++++ b/libpm/Cargo.toml
+@@ -8,6 +8,7 @@ publish = false
+ anyhow = "1"
+ bumpalo = "3"
+ libflatpak = "0.7"
++libc = "0.2"
+ memmap2 = "0.9"
+ milli = { path = "crates/milli", features = [
+     "chinese",
+diff --git a/libpm/src/dnf.rs b/libpm/src/dnf.rs
+index 49c2c421aac401c47a40ccd627dcce9f3dd927b5..dbfb77a8d856ccf798be9fd26875540798491301 100644
+--- a/libpm/src/dnf.rs
++++ b/libpm/src/dnf.rs
+@@ -1,5 +1,8 @@
+ use std::{
+-    collections::HashSet,
++    collections::{BTreeMap, HashSet},
++    fs::File,
++    io::{self, Read},
++    os::fd::{AsRawFd, FromRawFd},
+     process::{Command, Output, Stdio},
+ };
+ 
+@@ -69,9 +72,8 @@ pub(crate) fn update() -> Result<()> {
+     Ok(())
+ }
+ 
+-pub(crate) fn install(package: &str) -> Result<InstallOutcome> {
+-    let output = install_command(package)?
+-        .output()
++pub(crate) fn install(package: &str, report: impl Fn(f64)) -> Result<InstallOutcome> {
++    let output = run_with_progress(install_command(package)?, report)
+         .with_context(|| format!("installing {package} through pkexec"))?;
+     ensure!(
+         output.status.success(),
+@@ -81,17 +83,109 @@ pub(crate) fn install(package: &str) -> Result<InstallOutcome> {
+     Ok(InstallOutcome::Installed)
+ }
+ 
++fn run_with_progress(mut command: Command, report: impl Fn(f64)) -> Result<Output> {
++    let mut master = -1;
++    let mut slave = -1;
++    let size = libc::winsize {
++        ws_row: 24,
++        ws_col: 100,
++        ws_xpixel: 0,
++        ws_ypixel: 0,
++    };
++    // Both descriptors belong to this process on success and are closed by File.
++    let rc = unsafe {
++        libc::openpty(
++            &mut master,
++            &mut slave,
++            std::ptr::null_mut(),
++            std::ptr::null(),
++            &size,
++        )
++    };
++    if rc != 0 {
++        return Err(io::Error::last_os_error()).context("opening DNF progress terminal");
++    }
++    let mut master = unsafe { File::from_raw_fd(master) };
++    let slave = unsafe { File::from_raw_fd(slave) };
++    for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
++        if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } == -1 {
++            return Err(io::Error::last_os_error()).context("protecting DNF terminal descriptors");
++        }
++    }
++    command
++        .stdin(Stdio::null())
++        .stdout(Stdio::from(slave.try_clone()?))
++        .stderr(Stdio::from(slave));
++    let mut child = command.spawn().context("starting DNF")?;
++    // Command retains its stdio handles after spawn, so close them before reading.
++    drop(command);
++    let mut output = Vec::new();
++    let mut line = Vec::new();
++    let mut transaction = false;
++    let mut buffer = [0; 4096];
++    let read_result = loop {
++        match master.read(&mut buffer) {
++            Ok(0) => break Ok(()),
++            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
++            Err(error) if error.raw_os_error() == Some(libc::EIO) => break Ok(()),
++            Err(error) => break Err(error),
++            Ok(count) => {
++                for &byte in &buffer[..count] {
++                    if byte == b'\r' || byte == b'\n' {
++                        if line
++                            .windows(b"Transaction Summary:".len())
++                            .any(|part| part == b"Transaction Summary:")
++                        {
++                            transaction = true;
++                        } else if transaction {
++                            if let Some(progress) = parse_progress(&line) {
++                                report(progress);
++                            }
++                        }
++                        line.clear();
++                    } else if line.len() < 8192 {
++                        line.push(byte);
++                    }
++                }
++                output.extend_from_slice(&buffer[..count]);
++                if output.len() > 16384 {
++                    output.drain(..output.len() - 16384);
++                }
++            }
++        }
++    };
++    let status = child.wait()?;
++    read_result.context("reading DNF progress")?;
++    Ok(Output {
++        status,
++        stdout: output,
++        stderr: Vec::new(),
++    })
++}
++
++fn parse_progress(line: &[u8]) -> Option<f64> {
++    let text = std::str::from_utf8(line).ok()?;
++    let (_, total) = text.split_once("Total")?;
++    let (before_percent, _) = total.split_once('%')?;
++    let percent: f64 = before_percent.split_whitespace().last()?.parse().ok()?;
++    (0.0..=100.0).contains(&percent).then_some(percent * 0.009)
++}
++
++fn valid_package_name(package: &str) -> bool {
++    package
++        .bytes()
++        .next()
++        .is_some_and(|c| c.is_ascii_alphanumeric())
++        && package
++            .bytes()
++            .all(|c| c.is_ascii_alphanumeric() || b"+._-".contains(&c))
++}
++
+ fn install_command(package: &str) -> Result<Command> {
+     // Accept one repository package name. DNF also accepts paths, URLs, groups,
+     // and wildcard specs, which must not come from the app catalog.
+     ensure!(
+-        package
+-            .bytes()
+-            .next()
+-            .is_some_and(|c| c.is_ascii_alphanumeric())
+-            && package
+-                .bytes()
+-                .all(|c| c.is_ascii_alphanumeric() || b"+._-".contains(&c)),
++        valid_package_name(package),
+         "invalid RPM package name {package:?}"
+     );
+     let mut command = privileged_command();
+@@ -142,7 +236,7 @@ fn restart_output(output: &Output) -> Result<bool> {
+     Ok(hint.reboot_required)
+ }
+ 
+-pub(crate) fn catalog(apps: Vec<App>) -> Result<Vec<App>> {
++pub(crate) fn catalog(apps: Vec<App>) -> Result<(Vec<App>, Vec<App>)> {
+     let output = command()
+         .args([
+             "--cacheonly",
+@@ -152,7 +246,7 @@ pub(crate) fn catalog(apps: Vec<App>) -> Result<Vec<App>> {
+             "--arch",
+         ])
+         .arg(format!("{},noarch", std::env::consts::ARCH))
+-        .args(["--queryformat", "%{name}\n"])
++        .args(["--latest-limit=1", "--queryformat", "%{name}\t%{summary}\n"])
+         .output()
+         .context("loading Fedora repository package names")?;
+     if !output.status.success() {
+@@ -161,12 +255,65 @@ pub(crate) fn catalog(apps: Vec<App>) -> Result<Vec<App>> {
+             failure(&output, "loading Fedora repository package names")
+         );
+     }
+-    let names: HashSet<_> = std::str::from_utf8(&output.stdout)
+-        .context("reading DNF package names")?
+-        .lines()
+-        .map(str::to_owned)
++    let packages = parse_packages(
++        std::str::from_utf8(&output.stdout).context("reading DNF package metadata")?,
++    );
++    make_catalog(apps, packages)
++}
++
++fn parse_packages(output: &str) -> BTreeMap<String, String> {
++    let mut packages = BTreeMap::new();
++    for line in output.lines() {
++        if let Some((name, summary)) = line.split_once('\t') {
++            if valid_package_name(name) {
++                packages
++                    .entry(name.to_owned())
++                    .or_insert_with(|| summary.to_owned());
++            }
++        }
++    }
++    packages
++}
++
++fn make_catalog(
++    apps: Vec<App>,
++    packages: BTreeMap<String, String>,
++) -> Result<(Vec<App>, Vec<App>)> {
++    let names = packages.keys().cloned().collect();
++    let apps = catalog_for_packages(apps, &names);
++    let mapped: HashSet<_> = apps
++        .iter()
++        .filter(|a| a.package_source.manager == "dnf")
++        .map(|a| a.package_source.package.as_str())
+         .collect();
+-    Ok(catalog_for_packages(apps, &names))
++    let mut ids: HashSet<_> = apps.iter().map(|a| a.id).collect();
++    let mut native = Vec::new();
++    for (name, summary) in &packages {
++        if mapped.contains(name.as_str()) {
++            continue;
++        }
++        // Keep IDs stable across repository changes and exact in JavaScript.
++        let hash = name.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
++            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
++        });
++        let id = (1u64 << 52) | (hash & ((1u64 << 52) - 1));
++        ensure!(
++            ids.insert(id),
++            "duplicate catalog ID for RPM package {name}"
++        );
++        native.push(App {
++            id,
++            name: name.clone(),
++            description: summary.clone(),
++            package_source: crate::PackageSource {
++                manager: "dnf".into(),
++                package: name.clone(),
++            },
++            traffic: 0,
++            icon: None,
++        });
++    }
++    Ok((apps, native))
+ }
+ 
+ fn catalog_for_packages(apps: Vec<App>, names: &HashSet<String>) -> Vec<App> {
+@@ -298,4 +445,70 @@ mod tests {
+         assert_eq!(apps[0].icon.as_deref(), Some("upstream-icon"));
+         assert_eq!(apps[2].package_source.manager, "flatpak");
+     }
++    #[test]
++    fn native_catalog_includes_fedora_packages_with_stable_ids() {
++        let first =
++            parse_packages("new-tool\tNative tool\nnew-tool\tOld summary\n--invalid\tBad\n");
++        let (_, one) = make_catalog(Vec::new(), first.clone()).unwrap();
++        let mut second = first;
++        second.insert("another".into(), "Another package".into());
++        let (_, two) = make_catalog(Vec::new(), second).unwrap();
++        assert_eq!(one.len(), 1);
++        assert_eq!(one[0].description, "Native tool");
++        assert_eq!(
++            one[0].id,
++            two.iter().find(|a| a.name == "new-tool").unwrap().id
++        );
++        assert!(one[0].id < (1u64 << 53));
++    }
++
++    #[test]
++    fn terminal_progress_reports_only_transaction_totals_and_keeps_errors() {
++        use std::cell::RefCell;
++        let mut command = Command::new("/bin/sh");
++        command.args(["-c", "test -t 1 && test -t 2 && ! test -t 0 || exit 8; printf 'Total 90%%\\rTransaction Summary:\\n[1/2] Total 25%% | 1 MiB\\r[2/2] Total 75%% | 3 MiB\\rerror text\\n'; exit 42"]);
++        let values = RefCell::new(Vec::new());
++        let result = run_with_progress(command, |value| values.borrow_mut().push(value)).unwrap();
++        assert_eq!(result.status.code(), Some(42));
++        let values = values.borrow();
++        assert_eq!(values.len(), 2);
++        assert!((values[0] - 0.225).abs() < 1e-9);
++        assert!((values[1] - 0.675).abs() < 1e-9);
++        assert!(String::from_utf8_lossy(&result.stdout).contains("error text"));
++        assert_eq!(parse_progress(b"[1/2] Total 101%"), None);
++        assert_eq!(parse_progress(b"[1/2] package 45%"), None);
++    }
++    #[test]
++    #[ignore = "requires a disposable local RPM repository"]
++    fn dnf_fixture_reports_real_download_progress() {
++        use std::cell::RefCell;
++        let fixture = std::env::var("POND_TEST_DNF_FIXTURE").unwrap();
++        let root = tempfile::tempdir().unwrap();
++        let mut command = Command::new(DNF);
++        command
++            .args([
++                format!("--installroot={}", root.path().display()),
++                "--releasever=44".into(),
++                "--setopt=reposdir=/dev/null".into(),
++                format!("--repofrompath=fixture,file://{fixture}"),
++                "--setopt=fixture.gpgcheck=0".into(),
++                "--assumeyes".into(),
++                "install".into(),
++                "--downloadonly".into(),
++                "pond-test".into(),
++            ])
++            .env("LC_ALL", "C");
++        let values = RefCell::new(Vec::new());
++        let result = run_with_progress(command, |value| values.borrow_mut().push(value)).unwrap();
++        assert!(
++            result.status.success(),
++            "{}",
++            String::from_utf8_lossy(&result.stdout)
++        );
++        assert!(
++            !values.borrow().is_empty(),
++            "{}",
++            String::from_utf8_lossy(&result.stdout)
++        );
++    }
+ }
+diff --git a/libpm/src/lib.rs b/libpm/src/lib.rs
+index d26fa28b674034d341d375599c07e6daff6e13ae..8d6708a2fc4586279ea5f375293c853414551e89 100644
+--- a/libpm/src/lib.rs
++++ b/libpm/src/lib.rs
+@@ -55,38 +55,107 @@ pub enum InstallOutcome {
+ pub struct PackageManager {
+     apps: Vec<App>,
+     search: search::Search,
++    native: Vec<App>,
++}
++
++fn merge_results(curated: Vec<App>, native: &[App], query: &str, limit: usize) -> Vec<App> {
++    if limit == 0 {
++        return Vec::new();
++    }
++    let query = query.trim().to_ascii_lowercase();
++    if query.is_empty() {
++        return curated.into_iter().take(limit).collect();
++    }
++    let mut matches: Vec<_> = native
++        .iter()
++        .filter_map(|app| {
++            let name = app.name.to_ascii_lowercase();
++            let rank = if name == query {
++                0
++            } else if name.starts_with(&query) {
++                1
++            } else if name.contains(&query) {
++                2
++            } else if app.description.to_ascii_lowercase().contains(&query) {
++                3
++            } else {
++                return None;
++            };
++            Some((rank, app))
++        })
++        .collect();
++    matches.sort_unstable_by(|(a, x), (b, y)| a.cmp(b).then_with(|| x.name.cmp(&y.name)));
++    let exact = matches
++        .iter()
++        .take_while(|(rank, _)| *rank == 0)
++        .count()
++        .min(limit);
++    let mut result: Vec<_> = matches
++        .iter()
++        .take(exact)
++        .map(|(_, app)| (*app).clone())
++        .collect();
++    let native_quota = (limit / 2).max(1).min(matches.len());
++    let curated_quota = limit.saturating_sub(native_quota.max(exact));
++    let curated_count = curated.len().min(curated_quota);
++    result.extend(curated.iter().take(curated_count).cloned());
++    result.extend(
++        matches
++            .iter()
++            .skip(exact)
++            .take(limit - result.len())
++            .map(|(_, app)| (*app).clone()),
++    );
++    result.extend(
++        curated
++            .into_iter()
++            .skip(curated_count)
++            .take(limit - result.len()),
++    );
++    result
+ }
+ 
+ impl PackageManager {
+     pub fn init() -> Result<Self> {
+         let mut apps: Vec<App> = serde_json::from_slice(CATALOG).context("parsing catalog.json")?;
+-        if system::SystemPackageManager::detect()? == system::SystemPackageManager::Dnf {
+-            apps = dnf::catalog(apps)?;
+-        }
++        let native = if system::SystemPackageManager::detect()? == system::SystemPackageManager::Dnf
++        {
++            let (curated, native) = dnf::catalog(apps)?;
++            apps = curated;
++            native
++        } else {
++            Vec::new()
++        };
+         let search = search::Search::build(&apps)?;
+ 
+-        Ok(Self { apps, search })
++        Ok(Self {
++            apps,
++            search,
++            native,
++        })
+     }
+ 
+     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<App>> {
+         let ids = self.search.query(query, limit)?;
+-        Ok(ids
++        let curated: Vec<_> = ids
+             .iter()
+             .filter_map(|id| self.apps.iter().find(|app| app.id == *id).cloned())
+-            .collect())
++            .collect();
++        Ok(merge_results(curated, &self.native, query, limit))
+     }
+ 
+     pub fn install(&self, app_id: u64) -> Result<InstallOutcome> {
+         let app = self
+             .apps
+             .iter()
++            .chain(&self.native)
+             .find(|app| app.id == app_id)
+             .with_context(|| format!("app {app_id} is not in the package catalog"))?;
+ 
+         let status = install_status::InstallStatus::start(app);
+         let result = match app.package_source.manager.as_str() {
+             "flatpak" => flatpak::install(&app.package_source.package, status.progress()),
+-            "dnf" => dnf::install(&app.package_source.package),
++            "dnf" => dnf::install(&app.package_source.package, status.progress()),
+             "nix" => nix::install(&app.package_source.package),
+             "pacman" | "aur" => paru::install(&app.package_source.package, status.progress()),
+             manager => Err(anyhow!("package manager {manager:?} is not supported")),
+@@ -95,3 +164,38 @@ impl PackageManager {
+         result
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn app(id: u64, name: &str) -> App {
++        App {
++            id,
++            name: name.into(),
++            description: String::new(),
++            package_source: PackageSource {
++                manager: "dnf".into(),
++                package: name.into(),
++            },
++            traffic: 0,
++            icon: None,
++        }
++    }
++
++    #[test]
++    fn native_search_keeps_exact_matches_and_curated_results() {
++        let native = vec![app(2, "example-native"), app(3, "example")];
++        let curated = vec![app(1, "Example App")];
++        let result = merge_results(curated.clone(), &native, "EXAMPLE", 3);
++        assert_eq!(
++            result.iter().map(|app| app.id).collect::<Vec<_>>(),
++            [3, 1, 2]
++        );
++        assert_eq!(
++            merge_results(curated.clone(), &native, "example-native", 1)[0].id,
++            2
++        );
++        assert_eq!(merge_results(curated, &native, "", 10).len(), 1);
++    }
++}
+-- 
+2.56.0
+

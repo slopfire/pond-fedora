@@ -28,8 +28,9 @@ This directory keeps the installed Pond components in separate repositories.
 It is for this Fedora port. It does not configure a new desktop session or
 install the niri configuration, fonts, cursor theme, or desktop dependencies.
 
-- `pond-interface` tracks upstream on the `fedora` branch. The local commit
-  adds Codexbar. The upstream tray is used instead of the old custom tray.
+- `pond-interface` tracks upstream on the `fedora` branch. Local commits
+  add Codexbar. Fedora patches keep Qt 6.11 support and use the installed
+  wallpaper controller. The upstream tray is used instead of the old custom tray.
 - `vicinae` tracks the Butterfly fork of the launcher.
 - `package-manager` tracks upstream on the `fedora` branch. It adds a DNF5
   backend to `libpm` and keeps the upstream launcher extension and Flatpak backend.
@@ -96,6 +97,10 @@ the current user's Vicinae extensions. It does not delete shell or system files.
 `POND_DRY_RUN=1 ./pond install-system` to see the proposed file changes.
 The system files are not tracked by RPM. This is an update workflow for the
 existing port, not a complete installer for a fresh Fedora system.
+
+The wallpaper picker uses the installed controller and bundled images under
+`/usr/share/pond-interface/wallpaper`. It needs PyQt6 and `zenity`. The Fedora
+patch draws the gradient panel border with Qt 6.11 shape fills.
 
 ## Login and lock screens
 

@@ -1,4 +1,4 @@
-From 2c658bf80cbab00f6ed831bea571a8028794ab62 Mon Sep 17 00:00:00 2001
+From 15bab64f5263f39ac513340daa9d70a00b4684a0 Mon Sep 17 00:00:00 2001
 From: DillerOFire <niktofe1@gmail.com>
 Date: Sun, 1 Nov 2026 22:50:21 +1000
 Subject: [PATCH] Add Fedora package installs and updates through DNF5
@@ -603,3 +603,6 @@ index 7bb962d9f248066760c1de870f605ea2d41ac5b1..30dd2d8f67010b3d78aa71c5a7653013
      let kernel = fs::read_to_string("/proc/sys/kernel/osrelease")?;
      if !Path::new("/usr/lib/modules")
          .join(kernel.trim())
+-- 
+2.56.0
+

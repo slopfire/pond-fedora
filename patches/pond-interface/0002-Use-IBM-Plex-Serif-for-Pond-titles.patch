@@ -1,4 +1,4 @@
-From fb55c44283d3eda59dcc23fa5f38131dabe4fd26 Mon Sep 17 00:00:00 2001
+From ffbb305e4f200a2a76ca20bc1c13047b48fa799b Mon Sep 17 00:00:00 2001
 From: DillerOFire <niktofe1@gmail.com>
 Date: Mon, 2 Nov 2026 15:03:14 +1000
 Subject: [PATCH] Use IBM Plex Serif for Pond titles
@@ -13,7 +13,7 @@ Subject: [PATCH] Use IBM Plex Serif for Pond titles
  create mode 100644 shell/assets/fonts/OFL-IBM-Plex.txt
 
 diff --git a/lockscreen/frontend/Theme.qml b/lockscreen/frontend/Theme.qml
-index 64e3d41..eb9bbc4 100644
+index 64e3d41e2469ee14cf48710505e590c044fe3190..eb9bbc44ec81c61da097fb2da203f7448fe12917 100644
 --- a/lockscreen/frontend/Theme.qml
 +++ b/lockscreen/frontend/Theme.qml
 @@ -13,6 +13,9 @@ QtObject {
@@ -28,10 +28,10 @@ index 64e3d41..eb9bbc4 100644
      readonly property string uiFont: "Onest"
  }
 diff --git a/shell/Theme.qml b/shell/Theme.qml
-index febe91d..97d0bf7 100644
+index e3f2c9df20bf59edea8fc10f93240b0cda0baa8e..cf718a41bddfc8a8fe35714dbddabb563887f437 100644
 --- a/shell/Theme.qml
 +++ b/shell/Theme.qml
-@@ -16,6 +16,11 @@ Singleton {
+@@ -27,6 +27,11 @@ Singleton {
  
    function reload() { themeFile.reload(); }
  
@@ -43,7 +43,7 @@ index febe91d..97d0bf7 100644
    FileView {
      id: themeFile
      path: StandardPaths.writableLocation(StandardPaths.ConfigLocation) + "/pond-interface/theme.json"
-@@ -84,7 +89,7 @@ Singleton {
+@@ -95,7 +100,7 @@ Singleton {
    readonly property int mediaRevealDuration: 180
    readonly property int sidebarStrokeWidth: 1
    readonly property string fontFamily: "Onest"
@@ -2042,7 +2042,7 @@ HcmV?d00001
 
 diff --git a/shell/assets/fonts/OFL-IBM-Plex.txt b/shell/assets/fonts/OFL-IBM-Plex.txt
 new file mode 100644
-index 0000000..f72f765
+index 0000000000000000000000000000000000000000..f72f76504cd73cf2c00b140b2743c138320597b6
 --- /dev/null
 +++ b/shell/assets/fonts/OFL-IBM-Plex.txt
 @@ -0,0 +1,92 @@

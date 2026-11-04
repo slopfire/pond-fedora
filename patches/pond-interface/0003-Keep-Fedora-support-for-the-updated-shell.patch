@@ -1,0 +1,125 @@
+From aa1995ff21a35c2f50a31961393a1cccdd5b7852 Mon Sep 17 00:00:00 2001
+From: DillerOFire <niktofe1@gmail.com>
+Date: Wed, 4 Nov 2026 20:50:22 +1000
+Subject: [PATCH] Keep Fedora support for the updated shell
+
+---
+ CMakeLists.txt                      |  2 +-
+ shell/PanelBorder.qml               | 22 ++++++++++++++--------
+ shell/codexbar/tests/model.test.mjs | 20 +++++++++++++-------
+ shell/settings/appearance/State.qml |  6 +++---
+ 4 files changed, 31 insertions(+), 19 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 3ea779ae1eb1bedfcd8e7dacb9ba0527bf55882e..2b5fbdbb88a41d70a91999ef5876405726183f56 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,6 +1,6 @@
+ cmake_minimum_required(VERSION 3.21)
+ project(pond-interface LANGUAGES CXX)
+-find_package(Qt6 6.12 REQUIRED COMPONENTS Gui Qml DBus)
++find_package(Qt6 6.11 REQUIRED COMPONENTS Gui Qml DBus)
+ find_package(KF6NetworkManagerQt REQUIRED)
+ qt_standard_project_setup(REQUIRES 6.7)
+ qt_add_qml_module(pond_system
+diff --git a/shell/PanelBorder.qml b/shell/PanelBorder.qml
+index b58900980734728608f7174b4493314e9c8daee3..b7ce519eda232bddc8fd44f52d0081ab831c690c 100644
+--- a/shell/PanelBorder.qml
++++ b/shell/PanelBorder.qml
+@@ -12,19 +12,25 @@ Shape {
+   preferredRendererType: Shape.CurveRenderer
+ 
+   ShapePath {
+-    strokeWidth: 1
+-    fillColor: "transparent"
+-    strokeGradient: LinearGradient {
++    // Fill a one-pixel ring because Qt 6.11 has no stroke gradients.
++    strokeWidth: -1
++    fillRule: ShapePath.OddEvenFill
++    fillGradient: LinearGradient {
+       y2: root.height
+       GradientStop { position: 0; color: root.color }
+       GradientStop { position: 1; color: Qt.alpha(root.color, 0) }
+     }
+     PathRectangle {
+-      x: 0.5
+-      y: 0.5
+-      width: root.width - 1
+-      height: root.height - 1
+-      radius: root.radius - 0.5
++      width: root.width
++      height: root.height
++      radius: root.radius
++    }
++    PathRectangle {
++      x: 1
++      y: 1
++      width: root.width - 2
++      height: root.height - 2
++      radius: root.radius - 1
+     }
+   }
+ }
+diff --git a/shell/codexbar/tests/model.test.mjs b/shell/codexbar/tests/model.test.mjs
+index bf114a46e2b521575ad132e9139e673f35fabf9c..b0657ad8e1dc0c41bace6a2c6dd5fe29b4447a9c 100644
+--- a/shell/codexbar/tests/model.test.mjs
++++ b/shell/codexbar/tests/model.test.mjs
+@@ -2,16 +2,22 @@
+ //
+ // Inputs copy the shapes the helper emits (see the plasmoid's contract doc):
+ // percentLeft is remaining, rows may be empty, errors carry only a message,
+-// dailyUsage is 30 padded days. Values in the demo snapshot are a week of
+-// state captured from a live run.
++// dailyUsage is 30 padded days. All test values are synthetic.
+ import assert from "node:assert/strict";
+-import { readFileSync } from "node:fs";
+-import path from "node:path";
+-import { fileURLToPath } from "node:url";
+ import * as Model from "../CodexBarModel.mjs";
+ 
+-const here = path.dirname(fileURLToPath(import.meta.url));
+-const demo = JSON.parse(readFileSync(path.join(here, "../demo/snapshot.json"), "utf8"));
++const demo = {
++  generatedAt: "2026-10-29T12:00:00Z",
++  entries: [
++    { provider: "grok", rows: [{ percentLeft: 80 }] },
++    { provider: "antigravity", rows: [{ percentLeft: 60 }] },
++    { provider: "claude", rows: [{ percentLeft: 40 }] },
++    { provider: "codex", rows: [{ percentLeft: 18 }] },
++    { provider: "cursor", rows: [], error: { message: "Test error" } },
++    { provider: "jetbrains", rows: [], error: { message: "Test error" } },
++    { provider: "opencode", rows: [], error: { message: "Test error" } },
++  ],
++};
+ const theme = { ink: "#FFFFFF", yellow: "#EBE075", red: "#FA6D80", track: "#303030" };
+ const now = Date.parse(demo.generatedAt);
+ 
+diff --git a/shell/settings/appearance/State.qml b/shell/settings/appearance/State.qml
+index b9f9d56c778e67d15da62f4092ea55e1bef4df6a..ee7663cad8806fdfc782c805dbddd4188b39c398 100644
+--- a/shell/settings/appearance/State.qml
++++ b/shell/settings/appearance/State.qml
+@@ -96,7 +96,7 @@ Singleton {
+   }
+   Process {
+     id: picker
+-    command: ["python3", Quickshell.shellDir + "/../wallpaper/control.py", "pick"]
++    command: ["python3", "/usr/share/pond-interface/wallpaper/control.py", "pick"]
+     stdout: StdioCollector {
+       onStreamFinished: root.receive(text, "Could not open the image picker")
+     }
+@@ -151,10 +151,10 @@ Singleton {
+   function apply(args, script = "settings/appearance/control.py") {
+     if (action.running || picker.running) return;
+     error = "";
+-    action.command = ["python3", Quickshell.shellDir + "/" + script].concat(args);
++    action.command = ["python3", script.startsWith("/") ? script : Quickshell.shellDir + "/" + script].concat(args);
+     action.running = true;
+   }
+-  function applyWallpaper(args) { apply(args, "../wallpaper/control.py"); }
++  function applyWallpaper(args) { apply(args, "/usr/share/pond-interface/wallpaper/control.py"); }
+   function selectTheme(theme) {
+     if (busy) return;
+     apply(["theme", theme]);
+-- 
+2.56.0
+

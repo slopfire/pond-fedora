@@ -295,6 +295,57 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('libexec/pond/pm', result.stdout)
         self.assertFalse(self.extension_target().exists())
 
+    def test_system_dry_run_stages_wallpaper_module_controller_and_images(self):
+        self.setup_sources()
+        pond = self.root / 'pond-interface'
+        for relative in (
+            'lockscreen/main.qml', 'config/example.kdl',
+            'screenshot/Preview.qml', 'screenshot/State.qml', 'screenshot/qmldir',
+            'screenshot/clipboard.py', 'screenshot/assets/example.svg',
+            'wallpaper/desktop/Content.qml', 'wallpaper/desktop/Reveal.qml',
+            'wallpaper/desktop/Window.qml', 'wallpaper/desktop/qmldir',
+            'wallpaper/desktop/dither.frag.qsb', 'wallpaper/control.py',
+            'wallpaper/catalog.json', 'wallpaper/included/example.jpg',
+            'wallpaper/daylight/Sky.qml', 'wallpaper/daylight/sky.js',
+            'wallpaper/daylight/qmldir', 'wallpaper/daylight/sky.frag.qsb',
+        ):
+            self.commit(pond, relative, 'fixture\n')
+        self.commit(self.root / 'package-manager', '.gitignore', 'launcher-extension/dist/\n')
+        self.commit(self.root / 'package-manager', 'icons/example.webp', 'icon\n')
+        self.extension_source()
+        build = self.root / 'fedora-tools/.build'
+        for relative in (
+            'system/libpond_system.so', 'system/Pond/System/libpond_systemplugin.so',
+            'system/Pond/System/pond_system.qmltypes', 'system/Pond/System/qmldir',
+            'screenshot/libpond_screenshot_drag.so',
+            'screenshot/Pond/Screenshot/Native/libpond_screenshot_dragplugin.so',
+            'screenshot/Pond/Screenshot/Native/pond_screenshot_drag.qmltypes',
+            'screenshot/Pond/Screenshot/Native/qmldir', 'package-manager/release/pm',
+        ):
+            path = build / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('built fixture\n')
+        for marker, repo in (('system-built', pond), ('package-manager-built', self.root / 'package-manager')):
+            (build / marker).write_text(self.git(repo, 'rev-parse', 'HEAD') + '\n')
+        commands = self.root / 'commands'
+        commands.mkdir()
+        patchelf = commands / 'patchelf'
+        patchelf.write_text('#!/bin/sh\nexit 0\n')
+        patchelf.chmod(0o755)
+        self.env['PATH'] = str(commands) + os.pathsep + self.env['PATH']
+        self.env['POND_DRY_RUN'] = '1'
+        result = self.pond('install-system')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        for installed in (
+            'lib64/qt6/qml/Pond/Wallpaper/Content.qml',
+            'lib64/qt6/qml/Pond/Wallpaper/dither.frag.qsb',
+            'share/pond-interface/wallpaper/control.py',
+            'share/pond-interface/wallpaper/catalog.json',
+            'share/pond-interface/wallpaper/included/example.jpg',
+        ):
+            self.assertIn(installed, result.stdout)
+        self.assertFalse(self.extension_target().exists())
+
     def publication_checkout(self):
         self.setup_sources()
         workspace = self.root / 'published-workspace'

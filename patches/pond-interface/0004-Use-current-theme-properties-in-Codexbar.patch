@@ -1,0 +1,65 @@
+From 37273dcc656b1238f37af6dc24847b808068f434 Mon Sep 17 00:00:00 2001
+From: DillerOFire <niktofe1@gmail.com>
+Date: Wed, 4 Nov 2026 20:53:44 +1000
+Subject: [PATCH] Use current theme properties in Codexbar
+
+---
+ shell/codexbar/Bar.qml         | 4 ++--
+ shell/codexbar/SidebarCard.qml | 8 ++++----
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/shell/codexbar/Bar.qml b/shell/codexbar/Bar.qml
+index 7f5a4ba30323efbe47aec373c4d7df4e3039768d..810837e23e41335d5c85bcd53aedadf66a894269 100644
+--- a/shell/codexbar/Bar.qml
++++ b/shell/codexbar/Bar.qml
+@@ -16,10 +16,10 @@ Item {
+   property real nowMs: Date.now()
+   property bool wide: false
+   readonly property var theme: ({
+-    ink: Shell.Theme.daylight ? "#FFFFFF" : Shell.Theme.sidebarV3Foreground,
++    ink: Shell.Theme.sidebarForeground,
+     yellow: "#EBE075",
+     red: "#FA6D80",
+-    track: Shell.Theme.daylight ? Qt.rgba(1, 1, 1, 0.14) : "#2B2B2B"
++    track: Shell.Theme.translucent ? Qt.rgba(1, 1, 1, 0.14) : "#2B2B2B"
+   })
+   readonly property real percentLeft: Math.max(0, Math.min(100, Number(row ? row.percentLeft : 0)))
+   readonly property real timeLeft: Model.windowLeft(row, nowMs)
+diff --git a/shell/codexbar/SidebarCard.qml b/shell/codexbar/SidebarCard.qml
+index ac6cd0ef2d8991aaa640ec1e9015b1ca61168105..be1118468a0b76457bd7180babfb6310547612e2 100644
+--- a/shell/codexbar/SidebarCard.qml
++++ b/shell/codexbar/SidebarCard.qml
+@@ -35,10 +35,10 @@ Shell.Card {
+   readonly property int liveCount: entries.filter(entry => !Model.isErrorOnly(entry)).length
+   readonly property string ageText: state.generatedAt === "" ? "" : Model.ageText(state.generatedAt, state.nowMs)
+   readonly property var theme: ({
+-    ink: Shell.Theme.daylight ? "#FFFFFF" : Shell.Theme.sidebarV3Foreground,
++    ink: Shell.Theme.sidebarForeground,
+     yellow: "#EBE075",
+     red: "#FA6D80",
+-    track: Shell.Theme.daylight ? Qt.rgba(1, 1, 1, 0.14) : "#2B2B2B"
++    track: Shell.Theme.translucent ? Qt.rgba(1, 1, 1, 0.14) : "#2B2B2B"
+   })
+   readonly property int padding: 8
+   readonly property int headerHeight: 30
+@@ -60,7 +60,7 @@ Shell.Card {
+   implicitHeight: height
+   radius: Shell.Theme.lerp(12, Shell.Theme.sidebarCardRadius, widthProgress)
+   classicColor: cardHover.hovered || panelOpen ? Shell.Theme.mediaHoverBackground
+-      : Shell.Theme.sidebarV3Background
++      : Shell.Theme.sidebarBackground
+   animateClassicColor: true
+   clip: true
+ 
+@@ -165,7 +165,7 @@ Shell.Card {
+       width: status.width + 10
+       height: 15
+       radius: 7.5
+-      color: Shell.Theme.daylight ? Qt.rgba(1, 1, 1, 0.06) : "#262626"
++      color: Shell.Theme.translucent ? Qt.rgba(1, 1, 1, 0.06) : "#262626"
+       Text {
+         id: status
+         anchors.centerIn: parent
+-- 
+2.56.0
+

@@ -1,4 +1,4 @@
-From 10c8e12cd45916971c31ff2c473afdef1be3e52e Mon Sep 17 00:00:00 2001
+From 81b3a17cb31c75369a88baecc26fe5cb89aa4fa2 Mon Sep 17 00:00:00 2001
 From: DillerOFire <niktofe1@gmail.com>
 Date: Sat, 31 Oct 2026 23:16:35 +1000
 Subject: [PATCH] Add local Codexbar integration
@@ -149,7 +149,7 @@ Subject: [PATCH] Add local Codexbar integration
  create mode 100644 shell/codexbar/tests/model.test.mjs
 
 diff --git a/shell/Sidebar.qml b/shell/Sidebar.qml
-index 0b0f49720e22f937ebf18035268c8876e95831ab..3de501d4a2862bab756b5e70ecc64647d9b811fe 100644
+index 6b6d606b1a3516c47dcc3a01d2caddc2f89ee618..8ed2f479f6a775b1918d795777153ca42528b611 100644
 --- a/shell/Sidebar.qml
 +++ b/shell/Sidebar.qml
 @@ -10,6 +10,7 @@ import "media" as Media
@@ -193,7 +193,7 @@ index 0b0f49720e22f937ebf18035268c8876e95831ab..3de501d4a2862bab756b5e70ecc64647
    function togglePopup(name) {
      dismissPanels();
      Notifications.State.closePanel();
-@@ -106,10 +121,11 @@ PanelWindow {
+@@ -107,10 +122,11 @@ PanelWindow {
    implicitWidth: Math.ceil(Math.max(Theme.sidebarOuterMargin + Theme.sidebarCardExpandedWidth + Theme.sidebarFadeWidth,
        wifiPanel.visible ? panelX + wifiPanel.width + 67 : 0,
        audioPanel.visible ? panelX + audioPanel.width + 67 : 0,
@@ -207,7 +207,7 @@ index 0b0f49720e22f937ebf18035268c8876e95831ab..3de501d4a2862bab756b5e70ecc64647
      height: root.height
      // Let the background receive clicks between the card stacks.
      Region {
-@@ -157,9 +173,11 @@ PanelWindow {
+@@ -158,9 +174,11 @@ PanelWindow {
        collapseProgress: root.collapseProgress
        maximumHeight: Math.max(64,
            bottomStack.y - Theme.sidebarCardGap - mainStack.y
@@ -221,7 +221,7 @@ index 0b0f49720e22f937ebf18035268c8876e95831ab..3de501d4a2862bab756b5e70ecc64647
        onFocusRequested: index => NiriMsg.focusWorkspace(index)
        onWindowRequested: windowId => NiriMsg.focusWindow(windowId)
        onAddRequested: workspaceId => NiriMsg.openLauncher(workspaceId)
-@@ -177,6 +195,23 @@ PanelWindow {
+@@ -178,6 +196,23 @@ PanelWindow {
        onPanelRequested: { root.dismissPanels(); Notifications.State.togglePanel(root.screen.name); }
      }
  
@@ -245,7 +245,7 @@ index 0b0f49720e22f937ebf18035268c8876e95831ab..3de501d4a2862bab756b5e70ecc64647
      Installs.SidebarCard {
        id: installsCard
        width: root.cardWidth
-@@ -230,6 +265,16 @@ PanelWindow {
+@@ -231,6 +266,16 @@ PanelWindow {
      anchors.bottomMargin: Theme.sidebarOuterMargin
    }
  
@@ -7293,7 +7293,7 @@ index 0000000000000000000000000000000000000000..bf114a46e2b521575ad132e9139e673f
 +
 +console.log(`\n${passed} tests passed`);
 diff --git a/shell/shell.qml b/shell/shell.qml
-index 3e6dc2b910219da79a9ec7b96354f8b9e8243f3f..92958fd103387c39dd1054a54ea728ad602b442a 100644
+index ec7bfdc675b5da0f831e9e3bb600257167834b63..3d7df54e3cf0aeb2a5a260f7c511a97793add5ac 100644
 --- a/shell/shell.qml
 +++ b/shell/shell.qml
 @@ -9,6 +9,7 @@ import "settings" as Settings
@@ -7319,3 +7319,6 @@ index 3e6dc2b910219da79a9ec7b96354f8b9e8243f3f..92958fd103387c39dd1054a54ea728ad
    Variants {
      model: Quickshell.screens
      delegate: Scope {
+-- 
+2.56.0
+

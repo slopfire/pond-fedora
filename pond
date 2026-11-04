@@ -94,13 +94,13 @@ install-system)
   trap 'rm -rf -- "$stage"' EXIT
   qml="$stage/usr/lib64/qt6/qml/Pond"
   mkdir -p "$stage/usr/share/pond-interface" "$qml/"{System,Screenshot/Native,Wallpaper,Daylight}
-  cp -a "$source_dir/shell" "$source_dir/lockscreen" "$source_dir/config" "$stage/usr/share/pond-interface/"
+  cp -a "$source_dir/shell" "$source_dir/lockscreen" "$source_dir/config" "$source_dir/wallpaper" "$stage/usr/share/pond-interface/"
   install -m 755 "$build/system/libpond_system.so" "$system/libpond_systemplugin.so" "$qml/System/"
   install -m 644 "$system/qmldir" "$system/pond_system.qmltypes" "$qml/System/"
   install -m 755 "$build/screenshot/libpond_screenshot_drag.so" "$drag/libpond_screenshot_dragplugin.so" "$qml/Screenshot/Native/"
   install -m 644 "$drag/qmldir" "$drag/pond_screenshot_drag.qmltypes" "$qml/Screenshot/Native/"
   cp -a "$source_dir/screenshot/Preview.qml" "$source_dir/screenshot/State.qml" "$source_dir/screenshot/qmldir" "$source_dir/screenshot/clipboard.py" "$source_dir/screenshot/assets" "$qml/Screenshot/"
-  cp -a "$source_dir/wallpaper/Content.qml" "$source_dir/wallpaper/Reveal.qml" "$source_dir/wallpaper/Window.qml" "$source_dir/wallpaper/qmldir" "$qml/Wallpaper/"
+  cp -a "$source_dir/wallpaper/desktop/"* "$qml/Wallpaper/"
   cp -a "$source_dir/wallpaper/daylight/"*.qml "$source_dir/wallpaper/daylight/"*.js "$source_dir/wallpaper/daylight/qmldir" "$source_dir/wallpaper/daylight/sky.frag.qsb" "$qml/Daylight/"
   for lib in "$qml/System/"*.so "$qml/Screenshot/Native/"*.so; do patchelf --set-rpath '$ORIGIN' "$lib"; done
   if [[ ${POND_DRY_RUN:-0} == 1 ]]; then
