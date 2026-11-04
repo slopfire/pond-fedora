@@ -3,12 +3,13 @@
     "url": "https://github.com/bflycomputer/pond-interface.git",
     "revision": "781b65784f79f70278a632fdd17838527be50473",
     "branch": "fedora",
-    "tree": "d8b0bb952bc953d815d31413fd8298a7a07de342",
+    "tree": "e4c31a202f7c6b8bd881c105d4d08089f20b4363",
     "patches": [
       "patches/pond-interface/0001-Add-local-Codexbar-integration.patch",
       "patches/pond-interface/0002-Use-IBM-Plex-Serif-for-Pond-titles.patch",
       "patches/pond-interface/0003-Keep-Fedora-support-for-the-updated-shell.patch",
-      "patches/pond-interface/0004-Use-current-theme-properties-in-Codexbar.patch"
+      "patches/pond-interface/0004-Use-current-theme-properties-in-Codexbar.patch",
+      "patches/pond-interface/0005-Preserve-local-Codexbar-changes-after-upstream-update.patch"
     ]
   },
   "package-manager": {

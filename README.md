@@ -78,8 +78,15 @@ at the target or within its directory tree. Move edits into the Git
 checkout before installing. It leaves extra files and user settings in place.
 It also leaves files that upstream removed in place and reports their names.
 The shell reloads after changes. Check `qs log -c pond-shell -t 30` if it fails
-to load. This repository does not contain the local Codexbar configuration or
+to load. If an update adds QML types that the running shell cannot find,
+restart the Pond shell with `qs kill -c pond-shell`, then `qs -d -c pond-shell`.
+This repository does not contain the local Codexbar configuration or
 real usage snapshots. The existing files stay on this machine.
+
+The Codexbar patches include its local settings pages, account controls,
+ring settings, and usage history. The installer keeps the existing native
+helper in the installed shell directory. Generated helper binaries are not
+part of the source patches.
 
 The shell loads the bundled IBM Plex Serif font for titles. The font comes from
 the Pond system archive and uses the SIL Open Font License 1.1. It is an open
